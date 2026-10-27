@@ -3,8 +3,10 @@
 Ponte ELC 6012 NET <-> MQTT <-> Home Assistant (auto-descoberta).
 
 O controle do ELC 6012 NET passa pela nuvem Intelbras (relay amt8000) —
-ver PROTOCOLO-ELC6012NET.md. Esta ponte abre uma sessão cloud por ciclo de
-polling e publica:
+ver PROTOCOLO-ELC6012NET.md. Esta ponte mantém UMA sessão cloud aberta (um
+login só) e consulta o status nela a cada --poll segundos. O relay aceita uma
+sessão por painel: enquanto a ponte estiver conectada, o app Guardian mostra
+"central desconectada". Publica:
 
   - alarm_control_panel "Cerca elétrica" (arm_away / disarm)
   - switch "Choque" (liga/desliga só o choque, sem mexer no alarme)
@@ -14,13 +16,14 @@ polling e publica:
   - binary_sensor "choque" (alta tensão ativa na cerca)
   - sensor de sinal (%)
   - binary_sensor de conectividade da ponte
+  - sensor "Último evento" e entidade event com os eventos novos do painel
 
 Requisitos: python3, paho-mqtt (pip install paho-mqtt)
 
 Uso (senhas por variável de ambiente para não aparecerem no `ps`):
   export ELC_PASSWORD=SUASENHA MQTT_PASSWORD=SENHA_MQTT
   python3 elc6012_ha_mqtt.py --mac 001A3F123456 \
-      --mqtt 192.168.3.10 --mqtt-user ha --poll 60
+      --mqtt 192.168.0.10 --mqtt-user ha --poll 15
 
 Descubra o MAC na rede local com:
   python3 elc6012_client.py --host <ip-do-elc> probe
@@ -39,11 +42,34 @@ except ImportError:
     print("Instale paho-mqtt:  pip install -r requirements.txt", file=sys.stderr)
     sys.exit(1)
 
-from elc6012_client import NUM_ZONES, ElcCloudSession, normalize_mac, password_bytes
+from elc6012_client import (NUM_ZONES, ElcCloudSession, PanelRefused, normalize_mac,
+                            password_bytes)
 
-POLL_DEFAULT = 60
-POLL_MIN = 30   # o relay Intelbras limita sessões por minuto (rate limiting);
-                # abaixo disso o login começa a ser recusado (NACK)
+POLL_DEFAULT = 15
+POLL_MIN = 10   # numa sessão aberta cada consulta leva ~0,3 s
+
+# Tipos da entidade event (para automações); "Acesso por download" (1410), que
+# o relay grava a cada login, é ignorado.
+EVENT_TYPES = ["disparo", "panico", "arme", "desarme", "bypass", "energia", "outro"]
+EVENT_ACCESS = "1410"
+
+
+def event_type(ev):
+    """Classifica um evento de parse_events() num dos EVENT_TYPES."""
+    eee = ev["codigo"][1:]
+    if eee in ("130", "133"):
+        return "disparo"
+    if eee in ("120", "122", "146"):
+        return "panico"
+    if ev["evento"].startswith("Desarme"):
+        return "desarme"
+    if ev["evento"].startswith("Arme"):
+        return "arme"
+    if eee == "570":
+        return "bypass"
+    if eee in ("301", "342"):
+        return "energia"
+    return "outro"
 
 
 class Bridge:
@@ -71,6 +97,8 @@ class Bridge:
         self._lock = threading.RLock()   # _last_pub/_last_status: loop principal x thread do paho
         self._last_pub = {}      # publish-on-change: evita re-publicar estados iguais
         self._last_status = None  # último status válido (None = painel inacessível)
+        self.session = None       # sessão cloud persistente (só o loop principal usa)
+        self._seen_events = None  # registros brutos da última leitura da página 0
 
     # -- MQTT ---------------------------------------------------------------
 
@@ -115,21 +143,43 @@ class Bridge:
         offline — quem decide a disponibilidade é o poll, que o loop principal
         antecipa após a falha para ressincronizar o estado."""
         try:
-            with ElcCloudSession(self.mac, self.password) as s:
-                if cmd == "ARM_AWAY":
-                    st = s.arm()
-                elif cmd == "DISARM":
-                    st = s.disarm()
-                elif cmd.startswith("SHOCK_"):
-                    st = s.set_shock(cmd == "SHOCK_ON")
-                else:
-                    _, on_off, zone = cmd.split("_")
-                    st = s.set_bypass(int(zone), on_off == "ON")
+            s = self._session()
+            if cmd == "ARM_AWAY":
+                st = s.arm()
+            elif cmd == "DISARM":
+                st = s.disarm()
+            elif cmd.startswith("SHOCK_"):
+                st = s.set_shock(cmd == "SHOCK_ON")
+            else:
+                _, on_off, zone = cmd.split("_")
+                st = s.set_bypass(int(zone), on_off == "ON")
+        except PanelRefused as e:
+            # O painel respondeu (recusando): a sessão continua boa.
+            print(f"[!] {cmd} recusado: {e}", file=sys.stderr)
+            return False
         except Exception as e:
             print(f"[!] falha ao executar {cmd}: {e}", file=sys.stderr)
+            self._drop_session()
             return False
         self._publish_status(st)
         return True
+
+    # -- sessão cloud -----------------------------------------------------------
+
+    def _session(self):
+        """A sessão aberta; abre (login) se não houver."""
+        if self.session is None:
+            s = ElcCloudSession(self.mac, self.password)
+            s.open()
+            self.session = s
+            print("[elc] sessão aberta")
+        return self.session
+
+    def _drop_session(self):
+        """Fecha a sessão após erro de comunicação; o próximo uso reconecta."""
+        if self.session is not None:
+            self.session.close()
+            self.session = None
 
     def _pub(self, topic, payload, retain=True):
         """Publica apenas se o valor mudou desde a última publicação."""
@@ -226,6 +276,21 @@ class Bridge:
             **on_off, **avail,
         })
 
+        # Eventos do buffer do painel (lidos a cada poll, página 0).
+        config("sensor", "last_event", "ultimo_evento_cerca", {
+            "name": "Último evento",
+            "state_topic": f"{self.prefix}/event/last",
+            "json_attributes_topic": f"{self.prefix}/event/last/attributes",
+            "icon": "mdi:history",
+            **avail,
+        })
+        config("event", "events", "cerca_eletrica", {
+            "name": "Eventos",
+            "state_topic": f"{self.prefix}/event/fired",
+            "event_types": EVENT_TYPES,
+            **avail,
+        })
+
         config("sensor", "signal", "sinal_elc", {
             "name": "Sinal ELC",
             "state_topic": f"{self.prefix}/signal/state",
@@ -270,15 +335,57 @@ class Bridge:
               f"abertas={st['zonas_abertas']} disparo={st['zonas_disparadas']} "
               f"bypass={st['zonas_bypass']}")
 
+    def _process_events(self, evs):
+        """Publica os eventos novos da página 0 (mais novo primeiro).
+
+        Na primeira leitura só memoriza o que já existia (e mostra o último
+        evento no sensor); depois, publica cada registro que não estava na
+        leitura anterior, do mais antigo para o mais novo."""
+        raws = [ev["bruto"] for ev in evs]
+        relevant = [ev for ev in evs if ev["codigo"] != EVENT_ACCESS]
+        if self._seen_events is None:
+            self._seen_events = set(raws)
+            if relevant:
+                self._publish_last_event(relevant[0])
+            return
+        new = []
+        for ev in evs:
+            if ev["bruto"] in self._seen_events:
+                break
+            new.append(ev)
+        self._seen_events = set(raws)
+        for ev in reversed(new):
+            if ev["codigo"] == EVENT_ACCESS:
+                continue
+            attrs = self._publish_last_event(ev)
+            self.mqtt.publish(f"{self.prefix}/event/fired", json.dumps(attrs), retain=False)
+            print(f"[evento] {ev['data']} {ev['hora']} {ev['evento']} ({ev['particao']})")
+
+    def _publish_last_event(self, ev):
+        attrs = {"event_type": event_type(ev), "evento": ev["evento"], "particao": ev["particao"],
+                 "zona_usuario": ev["zona_usuario"], "data": ev["data"], "hora": ev["hora"],
+                 "codigo": ev["codigo"]}
+        label = ev["evento"] if ev["particao"] == "—" else f"{ev['evento']} · {ev['particao']}"
+        self._pub("event/last/attributes", json.dumps(attrs))
+        self._pub("event/last", label)
+        return attrs
+
     def poll_once(self):
         try:
-            with ElcCloudSession(self.mac, self.password) as s:
-                st = s.status()
+            s = self._session()
+            st = s.status()
         except Exception as e:
             print(f"[!] falha ao consultar status: {e}", file=sys.stderr)
+            self._drop_session()
             self._mark_offline()
             return False
         self._publish_status(st)
+        try:
+            self._process_events(s.events_page(0))
+        except Exception as e:
+            # O status já foi publicado; só reconecta na próxima consulta.
+            print(f"[!] falha ao ler eventos: {e}", file=sys.stderr)
+            self._drop_session()
         return True
 
     def run(self):
@@ -303,11 +410,12 @@ class Bridge:
                 failures = 0
                 wait = self.poll
             else:
-                # backoff em caso de rate limiting/erro: 2x, até 10 min
+                # backoff (ex.: NACK 50 — outra sessão ativa): 2x, até 10 min
                 failures += 1
                 wait = min(self.poll * (2 ** failures), 600)
                 print(f"[!] nova tentativa em {wait}s")
             next_poll = time.monotonic() + wait
+        self._drop_session()
         self.mqtt.loop_stop()
 
 

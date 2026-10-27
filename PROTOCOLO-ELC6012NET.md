@@ -34,6 +34,14 @@ Sequência completa de sessão (validada ao vivo):
     -> comandos... (status / arme / desarme)
 ```
 
+### 1.1 Uma sessão por painel (validado ao vivo, 27/out/2026)
+
+O relay aceita **uma sessão por painel**. Enquanto uma sessão estiver aberta, um
+novo login recebe **NACK código 50** e o app Guardian mostra "central
+desconectada". Uma sessão aberta aguenta consultas periódicas indefinidamente
+(testado: 12 min, inclusive 120 s parada) com ~0,3 s por consulta. Ao fechar uma
+sessão, o relay pode levar alguns segundos para liberar o painel.
+
 ---
 
 ## 2. Enquadramento
@@ -194,9 +202,9 @@ depois a de 3 (ex.: `13A` disparo de zona, `57A` bypass, `3A1` falta de AC,
 **Página 0 = eventos mais recentes**; dentro de cada página, do mais novo para o
 mais antigo. Buffer de **64 eventos**.
 
-**Cada login na nuvem grava "Acesso por download" (E410)** — inclusive cada poll
-da ponte. Com polling de 60 s, o buffer cobre só ~1 h e os eventos reais (arme,
-desarme, disparo) saem dele rapidamente, também do histórico do app Guardian.
+**Cada login na nuvem grava "Acesso por download" (E410)**. Com uma sessão por
+poll de 60 s, o buffer cobria só ~1 h e os eventos reais saíam dele (também do
+histórico do app Guardian) — por isso a ponte mantém uma sessão só (§1.1).
 Validado: arme/desarme remoto aparecem como `34A7`/`14A7` com a partição certa
 (1 = alarme, 2 = choque).
 
@@ -227,7 +235,8 @@ Validado: arme/desarme remoto aparecem como `34A7`/`14A7` com a partição certa
 | Comando logo após vários seguidos | ⚠️ login OK, painel não respondeu ao `0x401E` (resposta vazia), **mas aplicou o comando** (choque ligou, conferido no app). O cliente agora consulta o status na mesma sessão para confirmar |
 | Bypass `0x401F [255,0,1,0,0,0,0,0,0]` e volta (27/out/2026) | ✅ `[62]` `0x00`→`0x02`→`0x00` (zona 2); resposta = status |
 | Bypass zona 1 (pelo app, 27/out/2026) | ✅ status com `[62]=0x01`; armado com zona anulada (`[30]=0x81 [31]=0x81`) |
-| Login em sequência rápida | ⚠️ NACK código 50 (`0x32`) — provável rate limiting |
+| Login com outra sessão ativa no painel | ⚠️ NACK código 50 (`0x32`) — o relay aceita **uma sessão por painel** (ver §1.1) |
+| Sessão única por 12 min (16 consultas, intervalos de 30/60/120 s) | ✅ sem queda, ~0,3 s por consulta; durante ela o app Guardian mostra "central desconectada" |
 
 ## 9. Referências de código (IL decodificado)
 

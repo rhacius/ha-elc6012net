@@ -75,7 +75,7 @@ estado confirmado pelo painel.
 ```bash
 export ELC_PASSWORD=SUASENHA MQTT_PASSWORD=SENHA_MQTT
 python3 elc6012_ha_mqtt.py --mac 001A3F123456 \
-    --mqtt IP_DO_BROKER --mqtt-user USUARIO --poll 60
+    --mqtt IP_DO_BROKER --mqtt-user USUARIO --poll 15
 ```
 
 Comandos vindos do HA (arme/desarme, choque, bypass) entram numa fila e são
@@ -84,10 +84,13 @@ publicados com *retain* são ignorados. Se um comando falhar (ex.:
 NACK do painel), a ponte não fica indisponível: ela registra o erro e faz um
 poll imediato para ressincronizar o estado.
 
-> **Rate limiting:** o relay Intelbras limita sessões por minuto — polling abaixo
-> de ~30 s faz o login ser recusado temporariamente. A ponte já aplica backoff
-> automático (dobra o intervalo em caso de falha, até 10 min). Cada ciclo de
-> polling leva ~3 s (sessão nova: descoberta + binds + login + status).
+> **Uma sessão por painel:** o relay Intelbras aceita só uma sessão por ELC. A
+> ponte mantém a sua aberta (um login só; cada consulta leva ~0,3 s), então,
+> **enquanto ela estiver rodando, o app Guardian mostra "central desconectada"**
+> e o CLI recebe NACK 50 — use o HA para controlar a cerca, ou pare a ponte para
+> usar o app. Se a sessão cair, a ponte reconecta com backoff (2x, até 10 min).
+> Manter uma sessão também preserva o histórico: cada login grava "Acesso por
+> download" no buffer de 64 eventos do ELC.
 
 Entidades criadas no HA (descoberta automática, dispositivo "ELC 6012 NET").
 Os entity_ids abaixo são sugeridos via `default_entity_id` (HA 2025.10+) e só
@@ -106,6 +109,11 @@ dispositivo (ex.: `alarm_control_panel.elc_6012_net_cerca_eletrica`):
 - **`binary_sensor.disparo`** — qualquer zona disparada
 - **`binary_sensor.choque_na_cerca`** — alta tensão ativa
 - **`sensor.sinal_elc`** — nível de sinal (%)
+- **`sensor.ultimo_evento_cerca`** — último evento do painel (ex.: "Desarme remoto ·
+  choque"), com data, hora, partição e zona/usuário nos atributos
+- **`event.cerca_eletrica`** — dispara a cada evento novo do painel, com tipo
+  `disparo`, `panico`, `arme`, `desarme`, `bypass`, `energia` ou `outro` (para
+  automações; pega até um disparo curto entre duas consultas)
 - **`binary_sensor.ponte_elc`** — conectividade da ponte; quando `OFF`, todas as
   demais entidades ficam `unavailable` (não exibem valores antigos)
 
@@ -121,7 +129,7 @@ After=network-online.target
 # ELC_PASSWORD=... e MQTT_PASSWORD=... (chmod 600, dono root)
 EnvironmentFile=/etc/elc6012/credenciais.env
 ExecStart=/usr/bin/python3 /opt/elc6012/elc6012_ha_mqtt.py \
-    --mac 001A3F123456 --mqtt 127.0.0.1 --poll 60
+    --mac 001A3F123456 --mqtt 127.0.0.1 --poll 15
 Restart=always
 RestartSec=15
 
@@ -287,8 +295,8 @@ ponte exigem o `paho-mqtt` (sem ele são pulados).
 | "painel não está conectado à nuvem" | ELC offline no relay | verificar internet do ELC no app Guardian |
 | login código 25 | senha errada | usar a senha do app Guardian |
 | NACK código 33 (0x21) | partição inexistente ou sem login | partições válidas: 255, 1 e 2 (o cliente já usa as certas) |
-| login NACK código 50 | sessões demais em pouco tempo (rate limiting) | aguarde ~1 min entre comandos |
+| login NACK código 50 | outra sessão ativa no painel (a ponte, o app Guardian ou uma sessão anterior ainda não liberada) | pare a ponte para usar o CLI/app; após fechar uma sessão, aguarde alguns segundos |
 | `bypass` recusado | alarme armado | desarme o alarme antes de anular/reativar zonas |
-| Estado OFF/unavailable intermitente | relay fecha conexão ociosa | normal — a ponte abre sessão nova a cada ciclo |
+| Ponte OFF com NACK 50 no log | o app Guardian (ou o CLI) pegou a sessão | feche o app/CLI; a ponte reconecta sozinha |
 | Tudo "unavailable" de repente | ponte morreu sem LWT | já tratado: a ponte registra LWT (will) no broker |
-| Conflito com o app no celular | relay pode priorizar uma sessão | feche o app Guardian se notar falhas de comando |
+| App Guardian: "central desconectada" | a ponte está com a sessão | esperado — use o HA, ou pare a ponte |

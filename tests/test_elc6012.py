@@ -37,6 +37,9 @@ class FakeSocket:
     def settimeout(self, t):
         pass
 
+    def setblocking(self, flag):
+        pass
+
     def sendall(self, data):
         self.sent.append(data)
         self.buf += self.responses.pop(0) if self.responses else b""
@@ -175,6 +178,12 @@ class TestXchg(unittest.TestCase):
         with self.assertRaisesRegex(ConnectionError, "checksum"):
             session(FRAMES["armado"][:-1] + b"\x00")._xchg(b"x")
 
+    def test_descarta_resposta_atrasada(self):
+        # Sobra de uma resposta anterior não pode virar a resposta do comando.
+        s = session(FRAMES["tudo_desligado"])
+        s.sock.buf = FRAMES["armado"]
+        self.assertFalse(s.set_shock(False)["choque"])
+
     def test_login_ok(self):
         login_ok = bytes.fromhex("00 00 00 00 00 03 f0 f0 00")
         login_ok += bytes([c.checksum(login_ok)])
@@ -185,7 +194,7 @@ class TestXchg(unittest.TestCase):
 
     def test_login_recusado_pelo_relay(self):
         s = session(ACK, ACK, NACK_LOGIN)
-        with self.assertRaisesRegex(ConnectionError, "código 50"):
+        with self.assertRaisesRegex(ConnectionError, "código 50.*outra sessão"):
             s._bind_and_login()
 
 
@@ -221,7 +230,7 @@ class TestComandos(unittest.TestCase):
     def test_nack_do_comando(self):
         nack = bytes.fromhex("00 00 00 00 00 02 f0 fd 27")   # código 39: zonas abertas
         nack += bytes([c.checksum(nack)])
-        with self.assertRaisesRegex(RuntimeError, "código 39"):
+        with self.assertRaisesRegex(c.PanelRefused, "código 39"):
             session(nack).arm()
 
 
@@ -247,7 +256,7 @@ class TestBypass(unittest.TestCase):
 
     def test_recusa_com_alarme_armado(self):
         s = session(FRAMES["armado"])
-        with self.assertRaisesRegex(RuntimeError, "desarme o alarme"):
+        with self.assertRaisesRegex(c.PanelRefused, "desarme o alarme"):
             s.set_bypass(2, True)
         self.assertEqual(len(s.sock.sent), 1)   # só o status; nenhum 0x401F
 
@@ -338,9 +347,10 @@ class FakeMsg:
 @unittest.skipIf(bridge_mod is None, "paho-mqtt não instalado")
 class TestBridge(unittest.TestCase):
     def setUp(self):
-        quiet = contextlib.redirect_stdout(io.StringIO())   # logs da ponte
-        quiet.__enter__()
-        self.addCleanup(quiet.__exit__, None, None, None)
+        for redirect in (contextlib.redirect_stdout, contextlib.redirect_stderr):   # logs da ponte
+            quiet = redirect(io.StringIO())
+            quiet.__enter__()
+            self.addCleanup(quiet.__exit__, None, None, None)
         self.b = bridge_mod.Bridge(MAC, "1234", "localhost", 1883, None, None, 60)
         self.b.mqtt = FakeMqtt()
 
@@ -380,12 +390,53 @@ class TestBridge(unittest.TestCase):
             self.b._on_message(None, None, msg)
         self.assertTrue(self.b.commands.empty())
 
+    def test_sessao_unica_entre_polls(self):
+        self.b.session = sess = session(FRAMES["so_choque"], EVENTOS_PAG7,
+                                        FRAMES["so_choque"], EVENTOS_PAG7)
+        self.assertTrue(self.b.poll_once())
+        self.assertTrue(self.b.poll_once())
+        self.assertIs(self.b.session, sess)   # nenhum novo login
+        self.assertEqual(len(sess.sock.sent), 4)
+
+    def test_eventos_novos(self):
+        old = [EVENTOS_PAG7[8 + 15 * i:8 + 15 * (i + 1)] for i in range(8)]
+        self.b.session = session(FRAMES["so_choque"], EVENTOS_PAG7,
+                                 FRAMES["so_choque"], event_page([DISPARO_Z1] + old[:7]))
+        self.b.poll_once()
+        pubs = self.b.mqtt.pubs
+        # 1ª leitura: só memoriza; o sensor mostra o evento mais novo (sem 1410)
+        self.assertEqual(pubs["elc6012/event/last"], "Arme remoto · choque")
+        self.assertNotIn("elc6012/event/fired", pubs)
+        self.b.poll_once()
+        fired = json.loads(pubs["elc6012/event/fired"])
+        self.assertEqual((fired["event_type"], fired["zona_usuario"]), ("disparo", "01"))
+        self.assertEqual(pubs["elc6012/event/last"], "Disparo de zona · alarme")
+
+    def test_tipos_de_evento(self):
+        evs = c.parse_events(EVENTOS_PAG7)
+        self.assertEqual({bridge_mod.event_type(e) for e in evs if e["codigo"] != "1410"},
+                         {"arme", "desarme"})
+
+    def test_recusa_do_painel_mantem_sessao(self):
+        self.b.session = sess = session(FRAMES["armado"])
+        self.assertFalse(self.b._execute("BYPASS_ON_2"))
+        self.assertIs(self.b.session, sess)
+
+    def test_falha_de_rede_derruba_sessao(self):
+        self.b.session = session(b"")
+        self.assertFalse(self.b.poll_once())
+        self.assertIsNone(self.b.session)
+        self.assertEqual(self.b.mqtt.pubs["elc6012/online/state"], "OFF")
+
     def test_discovery(self):
         self.b._publish_discovery()
         pubs = self.b.mqtt.pubs
         configs = {t: json.loads(p) for t, p in pubs.items() if p}
         switches = [t for t in configs if t.startswith("homeassistant/switch/")]
         self.assertEqual(len(switches), 1 + c.NUM_ZONES)   # choque + bypass 1..8
+        ev = configs["homeassistant/event/elc6012/events/config"]
+        self.assertEqual(ev["default_entity_id"], "event.cerca_eletrica")
+        self.assertIn("disparo", ev["event_types"])
         sw = configs["homeassistant/switch/elc6012/bypass_switch3/config"]
         self.assertEqual(sw["command_topic"], "elc6012/zone/3/bypass/set")
         self.assertEqual(sw["default_entity_id"], "switch.bypass_zona_3")

@@ -1,5 +1,5 @@
 name: ELC 6012 NET
-version: "1.0.2"
+version: "1.1.0"
 slug: elc6012_mqtt
 url: https://github.com/rhacius/ha-elc6012net
 # Imagens prontas (GitHub Actions); sem esta linha o HA compila localmente.
@@ -17,10 +17,10 @@ services:
 options:
   mac: ""
   password: ""
-  poll: 60
+  poll: 15
   prefix: elc6012
 schema:
   mac: match(^([0-9A-Fa-f]{2}[:-]?){5}[0-9A-Fa-f]{2}$)
   password: password
-  poll: int(30,600)
+  poll: int(10,600)
   prefix: str

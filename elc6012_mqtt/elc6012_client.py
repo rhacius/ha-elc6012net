@@ -131,6 +131,10 @@ def mac_to_bytes(mac: str) -> bytes:
 # Sessão cloud
 # ---------------------------------------------------------------------------
 
+class PanelRefused(RuntimeError):
+    """O painel recusou o comando (NACK ou pré-condição); a sessão continua válida."""
+
+
 class ElcCloudSession:
     """Uma sessão TCP com o relay amt8000 (binds + login).
 
@@ -164,6 +168,7 @@ class ElcCloudSession:
         Lê só esses bytes — um frame seguinte fica no socket em vez de se
         misturar a este. Em timeout, devolve o que chegou (os chamadores
         rejeitam pelo eco)."""
+        self._drain()
         self.sock.sendall(data)
         deadline = time.monotonic() + (timeout or self.timeout)
         buf = b""
@@ -204,6 +209,23 @@ class ElcCloudSession:
         if len(buf) >= need and checksum(buf[:-1]) != buf[-1]:
             raise ConnectionError(f"checksum inválido na resposta: {buf.hex(' ')}")
         return buf
+
+    def _drain(self):
+        """Descarta bytes pendentes (ex.: resposta que chegou após o timeout).
+
+        Numa sessão longa (a ponte mantém uma só), uma resposta atrasada seria
+        lida como a resposta do próximo comando."""
+        self.sock.setblocking(False)
+        try:
+            while True:
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    raise ConnectionError("conexão fechada pelo relay")
+                self._log(f"descartando {len(chunk)} B pendentes: {chunk.hex(' ')}")
+        except (BlockingIOError, socket.timeout):
+            pass
+        finally:
+            self.sock.setblocking(True)
 
     @staticmethod
     def _echo(resp: bytes) -> int:
@@ -263,9 +285,11 @@ class ElcCloudSession:
         payload = bytes([0x01]) + self.password_bytes + bytes([0x10, 0x00])
         resp = self._xchg(packet8000(CMD_LOGIN, payload))
         if self._echo(resp) == NACK:
-            # Observado com sessões em sequência rápida (código 50): rate limiting.
+            # Código 50 (validado): o painel já tem outra sessão ativa — app
+            # Guardian, outra ponte ou uma sessão anterior ainda não liberada.
             code = resp[8] if len(resp) > 9 else -1
-            raise ConnectionError(f"login recusado pelo relay (NACK, código {code})")
+            hint = " — outra sessão ativa (app Guardian?)" if code == 50 else ""
+            raise ConnectionError(f"login recusado pelo relay (NACK, código {code}){hint}")
         if self._echo(resp) != CMD_LOGIN or len(resp) < 9:
             raise ConnectionError(f"login sem resposta válida: {resp.hex(' ')}")
         err = resp[8]
@@ -335,18 +359,20 @@ class ElcCloudSession:
         a lista volta do mais novo para o mais antigo (validado ao vivo).
 
         Cada login na nuvem grava um "Acesso por download" (1410) no buffer
-        de 64 eventos — o polling da ponte também."""
-        out = []
-        for page in range(EVENT_PAGES):
-            resp = self._xchg(packet8000(CMD_EVENTS, bytes([page]), marker=b"\x00\x00\x00\x00"),
-                              timeout=20.0)
-            if self._echo(resp) != CMD_EVENTS:
-                raise RuntimeError(f"resposta inválida na página {page} de eventos: {resp.hex(' ')}")
-            self._log(f"eventos página {page}: {resp.hex(' ')}")
-            for ev in parse_events(resp):
-                ev["pagina"] = page
-                out.append(ev)
-        return out
+        de 64 eventos."""
+        return [ev for page in range(EVENT_PAGES) for ev in self.events_page(page)]
+
+    def events_page(self, page: int) -> list[dict]:
+        """Uma página (8 eventos) do buffer; a 0 tem os mais novos."""
+        resp = self._xchg(packet8000(CMD_EVENTS, bytes([page]), marker=b"\x00\x00\x00\x00"),
+                          timeout=20.0)
+        if self._echo(resp) != CMD_EVENTS:
+            raise RuntimeError(f"resposta inválida na página {page} de eventos: {resp.hex(' ')}")
+        self._log(f"eventos página {page}: {resp.hex(' ')}")
+        evs = parse_events(resp)
+        for ev in evs:
+            ev["pagina"] = page
+        return evs
 
     def set_bypass(self, zone: int, on: bool) -> dict:
         """Anula (on=True) ou reativa uma zona. A resposta já é o novo status.
@@ -358,7 +384,7 @@ class ElcCloudSession:
             raise ValueError(f"zona deve ser de 1 a {NUM_ZONES}")
         st = self.status()
         if st["sistema_armado"]:
-            raise RuntimeError("desarme o alarme antes de anular/reativar zonas")
+            raise PanelRefused("desarme o alarme antes de anular/reativar zonas")
         zones = set(st["zonas_bypass"])
         if on:
             zones.add(zone)
@@ -372,7 +398,7 @@ class ElcCloudSession:
         echo = self._echo(resp)
         if echo == NACK:
             code = resp[8] if len(resp) > 9 else -1
-            raise RuntimeError(f"comando recusado pelo painel (NACK, código {code})")
+            raise PanelRefused(f"comando recusado pelo painel (NACK, código {code})")
         if echo == CMD_FENCE_STATUS and len(resp) >= STATUS_LEN:
             return parse_fence_status(resp)
         if not resp:
