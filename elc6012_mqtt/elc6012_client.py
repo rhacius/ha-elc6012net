@@ -4,7 +4,7 @@ Cliente do protocolo Intelbras ELC 6012 NET (eletrificador de cerca).
 
 O ELC 6012 NET expõe na rede local (porta TCP 9009) APENAS um serviço de
 descoberta (2 sondas: MAC e modelo). Todo o controle (status, arme, desarme)
-passa pela nuvem Intelbras, que faz relay até o eletrificador:
+passa pela nuvem Intelbras (TCP puro, sem TLS), que faz relay até o eletrificador:
 
   1. amt.intelbras.com.br:9009   -> pacote CloudPacket(0xE5, MAC...) -> 0xFD
   2. amt8000.intelbras.com.br:9009 (mesma sessão TCP para tudo):
@@ -12,9 +12,11 @@ passa pela nuvem Intelbras, que faz relay até o eletrificador:
        b. bind de MAC    : Packet(0xFFF0, MAC em ASCII 12 chars)     -> F0FE
        c. login          : Packet(0xF0F0, [01, senha 6B, 10, 00])    -> F0F0, erro=0
        d. status         : PacketFence(0x0B4A)                        -> 165 bytes
-       e. arme/desarme   : Packet(0x401E, [255, modo])                -> status (165 B)
-                           modo: 0=desarme, 1=arme (partição 255 = partição
-                           virtual única do eletrificador; 0/1 -> NACK 0x21)
+       e. arme/desarme   : Packet(0x401E, [partição, modo])           -> status (165 B)
+                           modo: 0=desarme, 1=arme; partição 255 = alarme + choque,
+                           1 = só alarme, 2 = só choque
+       f. bypass         : Packet(0x401F, [255, z1..z8])              -> status (165 B)
+       g. eventos        : Packet(0x3900, [página 0-7])               -> 129 B
 
 Especificação obtida por engenharia reversa do app Guardian
 (br.com.intelbras.amtremotomobile) e validada contra um ELC 6012 NET real —
@@ -36,6 +38,10 @@ Uso:
   python3 elc6012_client.py --mac 001A3F123456 alarm-off
   python3 elc6012_client.py --mac 001A3F123456 bypass 3    # anula a zona 3
   python3 elc6012_client.py --mac 001A3F123456 unbypass 3  # (alarme desarmado)
+  python3 elc6012_client.py --mac 001A3F123456 events      # últimos 64 eventos
+
+A nuvem aceita uma sessão por painel: com a ponte/add-on rodando, o login
+recebe NACK 50 — pare-a antes de usar o CLI.
 """
 import argparse
 import os

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Teste: uma única sessão na nuvem aguenta consultas periódicas?
 
-Hoje a ponte abre uma sessão (e um login) por poll, e cada login grava um
-"Acesso por download" no buffer de 64 eventos do ELC. Se o relay mantiver a
-conexão aberta, a ponte pode fazer um login só e consultar o status nela.
+Até a 1.0.2 a ponte abria uma sessão (e um login) por poll, e cada login
+gravava um "Acesso por download" no buffer de 64 eventos do ELC. Este teste
+validou a sessão persistente adotada na 1.1.0 (12 min sem queda). Pare a ponte
+antes de rodá-lo: o relay aceita uma sessão por painel.
 
 Fases (≈ 12 min): 10 consultas a cada 30 s, 5 a cada 60 s e 1 após 120 s
 parada. Ao cair, mostra em que ponto caiu. No fim, lê a página 0 de eventos

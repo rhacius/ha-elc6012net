@@ -13,7 +13,7 @@ O ELC 6012 NET tem **dois caminhos de comunicação**:
 | Caminho | Função |
 |---|---|
 | **TCP 9009 local** (LAN) | **Somente descoberta**: 2 sondas (MAC e modelo). Nenhum comando de controle é aceito — pacotes de sessão são ignorados em silêncio. É a única porta TCP aberta. |
-| **Nuvem Intelbras** (relay) | **Todo o controle**: status, arme, desarme. O painel mantém conexão permanente com o relay; o app (ou este cliente) conecta no relay e é roteado até o painel pelo MAC. |
+| **Nuvem Intelbras** (relay) | **Todo o controle**: status, arme/desarme, bypass, eventos. TCP puro, sem TLS. O painel mantém conexão permanente com o relay; o app (ou este cliente) conecta no relay e é roteado até o painel pelo MAC. |
 
 Servidores (porta 9009 em ambos):
 
@@ -31,7 +31,7 @@ Sequência completa de sessão (validada ao vivo):
     -> Packet(0x30F6, appid16)          appid16 = [01, 00 x14, 01]   <- ACK F0FE
     -> Packet(0xFFF0, mac_ascii12)      ex.: "001A3F123456"          -> F0FE
     -> Packet(0xF0F0, login9)           [01, senha6, 10, 00]         -> F0F0, [8]=0 (OK)
-    -> comandos... (status / arme / desarme)
+    -> comandos... (status / arme / desarme / bypass / eventos)
 ```
 
 ### 1.1 Uma sessão por painel (validado ao vivo, 27/out/2026)
@@ -76,8 +76,9 @@ chk = XOR de todos os bytes anteriores; chk ^= 0xFF
 ### 2.5 Respostas do relay
 ```
 byte 0..3 : prefixo do relay (00 00 00 00 / 00 01 00 00 — varia; ignorar)
-byte 4..5 : len BE   (ACK/login/NACK: total = len + 7; status 0x0B4A: total = len + 1,
-                     ex.: len=0xA4 em frames de 165 bytes — o tamanho depende do eco)
+byte 4..5 : len BE   (ACK/login: total = len + 7; NACK: len + 8, ver abaixo;
+                     status 0x0B4A: total = len + 1, ex.: len=0xA4 em frames de
+                     165 bytes; eventos 0x3900: sempre 129 bytes, §6.1)
 byte 6..7 : eco do comando (ou F0FE=ACK de bind, F0FD=NACK/erro)
 byte 8..  : payload (no NACK: [8] = código de erro)
 último    : checksum
@@ -128,7 +129,7 @@ Resposta de 165 bytes (offsets incluem os 4 bytes de prefixo do relay):
 | `[31]` bit0 | **ALARME armado** (no app, "armado" = `[30].0 AND [31].0`) |
 | `[31]` bit1 | STAY |
 | `[46..47]` | bitmask LE de zonas abertas (bit0 = zona 1). O app lê só `[46]`: **o ELC tem 8 zonas** (idem `[54]` e `[62]`) |
-| `[54..55]` | bitmask LE de zonas disparadas |
+| `[54..55]` | bitmask LE de zonas disparadas — da decompilação, ainda não visto com disparo real |
 | `[62..63]` | bitmask LE de zonas em bypass (validado: zona 1 anulada → `[62]=0x01`) |
 | `[72..77]` | dia, mês, ano, hora, min, seg (relógio do painel) |
 | `[79]` bit0 | alimentação: 1 = bateria (`ACTIVE_BATTERY`), 0 = rede AC (`AC_POWER_OK`) — da decompilação, não validado |
@@ -160,7 +161,9 @@ devolve o novo estado, não um ACK simples.
 
 Erros conhecidos (`Get8000Error`): 0=OK, 25=senha inválida, 27/32=partição sem
 zonas habilitadas, 39=zonas abertas, 42=operação negada, 46/54/63/68/70=outros.
-`0x21` (33) observado ao usar partição ≠ 255 ou sem login.
+Observados ao vivo: `0x21` (33) num teste antigo (partição 0 ou sem login) e 50
+(`0x32`) no login com outra sessão ativa (§1.1); uma vez, código 0 num NACK de
+login logo após outra sessão (significado incerto).
 
 ## 6. Outros comandos (enum `CommandTypesAmt8000`)
 
@@ -176,7 +179,7 @@ zonas habilitadas, 39=zonas abertas, 42=operação negada, 46/54/63/68/70=outros
 zona com a cerca desarmada. Para armar com uma zona com defeito: desarmar →
 anular a zona → armar. O estado de bypass aparece no status em `[62..63]`.
 
-## 6.1 Buffer de eventos (comando 0x3900) — validado ao vivo (27/out/2026)
+### 6.1 Buffer de eventos (comando 0x3900) — validado ao vivo (27/out/2026)
 
 `GeneralEventsElc6012NetDataSource.ReadData` lê **8 páginas**: `Packet(0x3900, [página])`
 (marker `00 00 00 00`), página 0–7; resposta com eco `0x3900`, interpretada por
@@ -223,7 +226,7 @@ Validado: arme/desarme remoto aparecem como `34A7`/`14A7` com a partição certa
 
 ---
 
-## 8. Validação prática (ELC real, 26/out/2026)
+## 8. Validação prática (ELC real, 26–27/out/2026)
 
 | Etapa | Resultado |
 |---|---|
@@ -244,6 +247,8 @@ Validado: arme/desarme remoto aparecem como `34A7`/`14A7` com a partição certa
 | Bypass zona 1 (pelo app, 27/out/2026) | ✅ status com `[62]=0x01`; armado com zona anulada (`[30]=0x81 [31]=0x81`) |
 | Login com outra sessão ativa no painel | ⚠️ NACK código 50 (`0x32`) — o relay aceita **uma sessão por painel** (ver §1.1) |
 | Sessão única por 12 min (16 consultas, intervalos de 30/60/120 s) | ✅ sem queda, ~0,3 s por consulta; durante ela o app Guardian mostra "central desconectada" |
+| Eventos `0x3900` páginas 0–7 | ✅ 129 bytes cada; página 0 = mais recentes; arme/desarme remoto como `34A7`/`14A7` |
+| Disparo de zona / do choque (`[54]`, evento 131), alimentação `[79]`, PGM `[145]` | ⏳ não validados ao vivo (disparo exige romper/aterrar a cerca) |
 
 ## 9. Referências de código (IL decodificado)
 

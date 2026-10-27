@@ -4,16 +4,17 @@ Ponte entre o eletrificador **ELC 6012 NET** e o Home Assistant via
 **MQTT com auto-descoberta** (não requer componente custom).
 
 ```
-elc6012_ha_mqtt.py ──HTTPS/TCP──> nuvem Intelbras (relay amt8000) ──> ELC 6012 NET
+elc6012_ha_mqtt.py ──TCP 9009──> nuvem Intelbras (relay amt8000) ──> ELC 6012 NET
         │
         └──MQTT──> Broker ──> Home Assistant (alarm_control_panel, zonas, sensores)
 ```
 
 > **Como funciona:** o ELC 6012 NET só expõe na rede local um serviço de
-> *descoberta* (porta 9009: MAC e modelo). Todo o controle (status/arme/desarme)
-> passa pela **nuvem Intelbras** — o mesmo caminho do app Guardian. Portanto a
-> ponte precisa de acesso à internet, do **MAC** do ELC e da **senha** cadastrada
-> no app Guardian. Detalhes do protocolo: `PROTOCOLO-ELC6012NET.md`.
+> *descoberta* (porta 9009: MAC e modelo). Todo o controle (status, arme/desarme,
+> choque, bypass, eventos) passa pela **nuvem Intelbras** — o mesmo caminho do
+> app Guardian. Portanto a ponte precisa de acesso à internet (saída TCP 9009),
+> do **MAC** do ELC e da **senha** cadastrada no app Guardian. Detalhes do
+> protocolo: [`PROTOCOLO-ELC6012NET.md`](PROTOCOLO-ELC6012NET.md).
 
 > **Aviso:** projeto independente, sem vínculo com a Intelbras. O protocolo foi
 > obtido por engenharia reversa do app Guardian para fins de interoperabilidade
@@ -27,12 +28,14 @@ elc6012_ha_mqtt.py ──HTTPS/TCP──> nuvem Intelbras (relay amt8000) ──
 1. Configurações → Add-ons → Loja → ⋮ → **Repositórios** → adicione
    `https://github.com/rhacius/ha-elc6012net` (ou use o botão acima).
 2. Instale o add-on **ELC 6012 NET** (imagem pronta para `aarch64` e `amd64`).
-3. Na aba **Configuração**, informe o `mac` do ELC e a `password` do app Guardian.
+3. Na aba **Configuração**, informe o `mac` do ELC (mostrado no app Guardian, ou
+   pelo `probe` da seção 1) e a `password` do app Guardian.
 4. Inicie. O dispositivo aparece na integração **MQTT** (requer o add-on
    Mosquitto; as credenciais do broker são obtidas automaticamente).
 
 > **O add-on dispensa o app Guardian.** O uso do dia a dia — choque, alarme,
-> bypass, zonas, eventos e notificações — passa a ser pelo Home Assistant. A
+> bypass, zonas e eventos — passa a ser pelo Home Assistant, e as notificações
+> vêm de automações do HA (exemplos na seção 3). A
 > nuvem Intelbras aceita uma sessão por eletrificador e o add-on mantém a sua,
 > então o app mostra "central desconectada" enquanto ele roda. O app só é
 > necessário para configurações de instalação (zonas, usuários, PGM, Wi-Fi,
@@ -41,7 +44,8 @@ elc6012_ha_mqtt.py ──HTTPS/TCP──> nuvem Intelbras (relay amt8000) ──
 O que mudou em cada versão: [`elc6012_mqtt/CHANGELOG.md`](elc6012_mqtt/CHANGELOG.md)
 (o Home Assistant mostra o mesmo texto ao oferecer a atualização).
 
-As seções abaixo descrevem o uso sem add-on (CLI e ponte standalone).
+As seções 1 e 2 descrevem o uso sem add-on (CLI e ponte standalone); da seção 3
+em diante vale para os dois casos.
 
 ## Arquivos
 
@@ -54,6 +58,8 @@ As seções abaixo descrevem o uso sem add-on (CLI e ponte standalone).
 | `elc6012_mqtt/CHANGELOG.md` | Mudanças por versão (exibidas pelo HA na atualização) |
 | `repository.yaml` | Torna o repositório instalável pela loja de add-ons |
 | `tests/` | Testes com respostas reais do ELC (`python3 -m unittest`) |
+| `tools/sessao_persistente.py` | Teste ao vivo que validou a sessão única persistente |
+| `.github/workflows/build.yaml` | Build das imagens do add-on (branch `release`) |
 | `crc_table_2018.txt` | Tabela CRC do formato 2018 (referência; o ELC não usa na nuvem) |
 
 ## 1. Descobrir o MAC e testar
@@ -73,13 +79,19 @@ python3 elc6012_client.py --mac 001A3F123456 arm
 python3 elc6012_client.py --mac 001A3F123456 disarm
 python3 elc6012_client.py --mac 001A3F123456 shock-on    # só o choque
 python3 elc6012_client.py --mac 001A3F123456 shock-off
+python3 elc6012_client.py --mac 001A3F123456 alarm-on    # só o alarme
+python3 elc6012_client.py --mac 001A3F123456 alarm-off
 python3 elc6012_client.py --mac 001A3F123456 bypass 3      # anula a zona 3
 python3 elc6012_client.py --mac 001A3F123456 unbypass 3    # (só com o alarme desarmado)
 python3 elc6012_client.py --mac 001A3F123456 events        # histórico: últimos 64 eventos, mais novo primeiro
 ```
 
-O `status` imprime os campos interpretados; `arm`/`disarm` já retornam o novo
-estado confirmado pelo painel.
+O `status` imprime os campos interpretados; os comandos já retornam o novo
+estado confirmado pelo painel (`-v` mostra os frames brutos). `arm`/`disarm`
+acionam alarme **e** choque; `shock-*` e `alarm-*` mexem só em um deles.
+
+> Com a ponte ou o add-on rodando, o CLI recebe NACK 50 (uma sessão por
+> painel) — pare-os antes.
 
 ## 2. Rodar a ponte MQTT
 
@@ -90,7 +102,7 @@ python3 elc6012_ha_mqtt.py --mac 001A3F123456 \
 ```
 
 Comandos vindos do HA (arme/desarme, choque, bypass) entram numa fila e são
-executados pelo mesmo loop do polling, uma sessão cloud por vez. Comandos
+executados pelo mesmo loop do polling, na mesma sessão cloud. Comandos
 publicados com *retain* são ignorados. Se um comando falhar (ex.:
 NACK do painel), a ponte não fica indisponível: ela registra o erro e faz um
 poll imediato para ressincronizar o estado.
@@ -108,8 +120,8 @@ Os entity_ids abaixo são sugeridos via `default_entity_id` (HA 2025.10+) e só
 valem na criação da entidade; versões anteriores prefixam o nome do
 dispositivo (ex.: `alarm_control_panel.elc_6012_net_cerca_eletrica`):
 
-- **`alarm_control_panel.cerca_eletrica`** — ARMAR (away) / DESARMAR (único modo
-  oferecido no HA); estado `triggered` quando houver zona disparada.
+- **`alarm_control_panel.cerca_eletrica`** — ARMAR (away, único modo do ELC) /
+  DESARMAR; estado `triggered` quando houver zona disparada.
   O estado segue **só o alarme** (o alarme pode estar armado com o choque
   desligado). ARMAR/DESARMAR aqui aciona alarme **e** choque juntos (partição 255).
 - **`switch.choque`** — liga/desliga **só o choque** (o alarme não muda), como o
@@ -117,7 +129,8 @@ dispositivo (ex.: `alarm_control_panel.elc_6012_net_cerca_eletrica`):
 - **`binary_sensor.zona_1..8`** — zonas abertas (device_class `opening`; o ELC tem 8 zonas)
 - **`switch.bypass_zona_1..8`** — anula/reativa a zona (bypass). Só com o alarme
   desarmado: com ele armado o comando é recusado e o switch volta ao estado real
-- **`binary_sensor.disparo`** — qualquer zona disparada
+- **`binary_sensor.disparo`** — qualquer zona disparada (o disparo do choque
+  chega pelo `event.cerca_eletrica`, abaixo)
 - **`binary_sensor.choque_na_cerca`** — alta tensão ativa
 - **`sensor.sinal_elc`** — nível de sinal (%)
 - **`sensor.ultimo_evento_cerca`** — último evento do painel (ex.: "Desarme remoto ·
@@ -265,24 +278,53 @@ sections:
             text: Confirmar bypass da zona 1 da cerca?
 ```
 
-Se o ELC usa menos zonas, basta não incluir as tiles das zonas sem fio ligado.
+O ELC tem a zona 1 com fio e as zonas 2 a 8 sem fio: inclua só as tiles das
+zonas que têm sensor cadastrado.
 
-### Automação de exemplo
+### Automações de exemplo
+
+Notificar disparo da cerca (inclusive o disparo do choque, que não aparece nas
+zonas) e falta de energia. Troque `notify.mobile_app_celular` pelo seu serviço
+de notificação:
 
 ```yaml
-automation:
-  - alias: Desarma a cerca quando alguém chega em casa
-    trigger:
-      platform: state
-      entity_id: person.fulano
-      to: "home"
-    action:
-      service: alarm_control_panel.alarm_disarm
-      target:
-        entity_id: alarm_control_panel.cerca_eletrica
+alias: Cerca elétrica — disparo e falta de energia
+mode: queued
+triggers:
+  - trigger: state
+    entity_id: event.cerca_eletrica
+    not_from: unavailable
+conditions:
+  - condition: state
+    entity_id: event.cerca_eletrica
+    attribute: event_type
+    state: [disparo, energia]
+actions:
+  - action: notify.mobile_app_celular
+    data:
+      title: Cerca elétrica
+      message: >-
+        {{ state_attr('event.cerca_eletrica', 'evento') }}
+        ({{ state_attr('event.cerca_eletrica', 'particao') }})
 ```
 
-## 4. O protocolo em 7 linhas
+Avisar quando o choque for desligado:
+
+```yaml
+alias: Cerca elétrica — choque desligado
+triggers:
+  - trigger: state
+    entity_id: switch.choque
+    from: "on"
+    to: "off"
+actions:
+  - action: notify.mobile_app_celular
+    data:
+      title: Cerca elétrica
+      message: "Choque desligado ({{ states('sensor.ultimo_evento_cerca') }})"
+```
+
+## 4. O protocolo em poucas linhas
 
 1. `amt.intelbras.com.br:9009`: `CloudPacket(0xE5, [04,MAC,00,01,MAC,00x5])` → `FD`;
 2. `amt8000.intelbras.com.br:9009`: bind appID `0x30F6` → `F0FE`; bind MAC `0xFFF0` → `F0FE`;
@@ -292,12 +334,14 @@ automation:
 5. arme/desarme `0x401E` `[partição, modo]` (modo 1/0; partição 255 = alarme + choque,
    1 = só alarme, 2 = só choque) → novo status;
 6. bypass `0x401F` `[255, z1..z8]` (1 byte por zona; define todas de uma vez) → novo status;
-7. checksum = XOR de todos os bytes `^ 0xFF`.
+7. eventos `0x3900` `[página 0-7]` → 129 B, até 8 registros de 15 B (Contact ID, data, hora);
+8. checksum = XOR de todos os bytes `^ 0xFF`.
 
 ## 5. Testes
 
 ```bash
-python3 -m unittest -v        # na raiz do projeto
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m unittest -v        # na raiz do projeto
 ```
 
 Usam respostas reais do ELC (`tests/frames.py`, com o MAC trocado por um
@@ -315,5 +359,5 @@ ponte exigem o `paho-mqtt` (sem ele são pulados).
 | login NACK código 50 | outra sessão ativa no painel (a ponte, o app Guardian ou uma sessão anterior ainda não liberada) | pare a ponte para usar o CLI/app; após fechar uma sessão, aguarde alguns segundos |
 | `bypass` recusado | alarme armado | desarme o alarme antes de anular/reativar zonas |
 | Ponte OFF com NACK 50 no log | o app Guardian (ou o CLI) pegou a sessão | feche o app/CLI; a ponte reconecta sozinha |
-| Tudo "unavailable" de repente | ponte morreu sem LWT | já tratado: a ponte registra LWT (will) no broker |
+| Tudo "unavailable" | ponte parada ou sem sessão (`binary_sensor.ponte_elc` OFF) | ver o log do add-on; após NACK 50 a ponte tenta de novo com backoff (até 10 min) |
 | App Guardian: "central desconectada" | a ponte está com a sessão | esperado — use o HA, ou pare a ponte |
