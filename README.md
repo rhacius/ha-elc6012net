@@ -136,7 +136,113 @@ sudo systemctl enable --now elc6012-mqtt
 ## 3. Home Assistant
 
 Basta a integração **MQTT** ativa e o broker acessível. As entidades aparecem
-automaticamente. Exemplo de automação:
+automaticamente.
+
+### Dashboard de exemplo
+
+Uma view no layout de seções com tudo o que a ponte expõe. Para usar: no
+dashboard, **Editar → Adicionar view → ⋮ → Editar em YAML** e cole o trecho.
+
+```
+┌─ Cerca elétrica ──── ● Ponte  ▂▄▆ 44% ┐  ┌─ Zonas da cerca ─────────────────┐
+│  [ teclado: ARMAR / DESARMAR ]        │  │  Zona 1  Zona 2  Zona 3  Zona 4  │
+│  ⚡ Choque — segure para alterar  ON  │  │  Zona 5  Zona 6  Zona 7  Zona 8  │
+│  🛡 Disparo da cerca          Seguro  │  │  Bypass — segure para alterar    │
+└───────────────────────────────────────┘  │  Zona 1  Zona 2  …       Zona 8  │
+                                           └──────────────────────────────────┘
+```
+
+Os comandos que mexem na cerca (choque e bypass) só disparam **segurando** o
+tile e confirmando — um toque abre os detalhes. Isso evita energizar a cerca ou
+anular uma zona por engano.
+
+```yaml
+title: Cerca elétrica
+path: cerca
+icon: mdi:fence-electric
+type: sections
+max_columns: 2
+sections:
+  - type: grid
+    cards:
+      - type: heading
+        heading: Cerca elétrica
+        icon: mdi:fence-electric
+        badges:
+          - type: entity
+            entity: binary_sensor.ponte_elc   # ponte conectada?
+          - type: entity
+            entity: sensor.sinal_elc          # sinal do ELC (%)
+      # ARMAR/DESARMAR aciona alarme + choque juntos
+      - type: alarm-panel
+        entity: alarm_control_panel.cerca_eletrica
+        name: Alarme + choque
+        states:
+          - arm_away
+      # Só o choque (o alarme não muda); segure para alternar
+      - type: tile
+        entity: switch.choque
+        name: Choque — segure para alterar
+        icon: mdi:flash
+        color: red
+        tap_action:
+          action: more-info
+        hold_action:
+          action: perform-action
+          perform_action: switch.toggle
+          target:
+            entity_id: switch.choque
+          confirmation:
+            text: Confirmar alteração do choque da cerca?
+      - type: tile
+        entity: binary_sensor.disparo
+        name: Disparo da cerca
+        color: red
+
+  - type: grid
+    cards:
+      - type: heading
+        heading: Zonas da cerca
+        icon: mdi:fence
+      # Uma tile por zona (aberta/fechada) — repita para as zonas 3 a 8
+      - type: tile
+        entity: binary_sensor.zona_1
+        name: Zona 1
+        vertical: true
+        grid_options:
+          columns: 3
+      - type: tile
+        entity: binary_sensor.zona_2
+        name: Zona 2
+        vertical: true
+        grid_options:
+          columns: 3
+      - type: heading
+        heading: Bypass — segure para anular/reativar (só com o alarme desarmado)
+        heading_style: subtitle
+      # Uma tile de bypass por zona — repita para as zonas 2 a 8
+      - type: tile
+        entity: switch.bypass_zona_1
+        name: Zona 1
+        icon: mdi:shield-off-outline
+        color: amber
+        vertical: true
+        grid_options:
+          columns: 3
+        tap_action:
+          action: more-info
+        hold_action:
+          action: perform-action
+          perform_action: switch.toggle
+          target:
+            entity_id: switch.bypass_zona_1
+          confirmation:
+            text: Confirmar bypass da zona 1 da cerca?
+```
+
+Se o ELC usa menos zonas, basta não incluir as tiles das zonas sem fio ligado.
+
+### Automação de exemplo
 
 ```yaml
 automation:
