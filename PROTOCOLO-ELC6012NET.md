@@ -168,6 +168,30 @@ zonas habilitadas, 39=zonas abertas, 42=operação negada, 46/54/63/68/70=outros
 zona com a cerca desarmada. Para armar com uma zona com defeito: desarmar →
 anular a zona → armar. O estado de bypass aparece no status em `[62..63]`.
 
+## 6.1 Buffer de eventos (comando 0x3900) — da decompilação, NÃO validado ao vivo
+
+`GeneralEventsElc6012NetDataSource.ReadData` lê **8 páginas**: `Packet(0x3900, [página])`
+(marker `00 00 00 00`), página 0–7; resposta com eco `0x3900`, interpretada por
+`ElcInterpreterInformation.ReadEventsData`. Ainda não se sabe se o `len` segue a
+regra do status (total = len + 1) ou a dos ACKs (len + 7) — o cliente aceita as duas.
+
+Cada página traz até 8 registros de **15 bytes**, a partir de `[8]` (o app lê
+enquanto o início do registro for < 128). Registro começando com `FF` = vazio.
+
+| Offset no registro | Conteúdo |
+|---|---|
+| `[0..3]` | código **Contact ID**, um dígito por byte, com 0 escrito como `A` (ex.: `01 01 03 0A` = 1130: qualificador 1 + evento 130) |
+| `[5]` | partição: 1 = alarme, 2 = choque, 15 = alarme e choque (o app trata `1131` na partição 1 como choque) |
+| `[7..8]` | zona/usuário (dois bytes exibidos lado a lado) |
+| `[9..11]` | dia, mês, ano |
+| `[12..14]` | hora, minuto, segundo |
+
+Nomes (`Elc6012Net.EVENTS_TRANSLATED`): procura primeiro a chave de 4 dígitos
+(com o qualificador — ex.: `14A1` desarme por usuário, `34A1` arme por usuário) e
+depois a de 3 (ex.: `13A` disparo de zona, `57A` bypass, `3A1` falta de AC,
+`461` senha incorreta, `422` PGM). Lista completa em `EVENT_NAMES` no cliente.
+Ordem do buffer (circular? página 0 = mais recente?) a confirmar ao vivo.
+
 ## 7. Senha em pares (formato 2018 — identify/handshake)
 
 `Converters.GetPartsInBytes(s, n)`: pega pares de caracteres e converte como hex

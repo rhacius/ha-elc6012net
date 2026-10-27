@@ -257,6 +257,63 @@ class TestBypass(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Eventos (página SINTÉTICA no formato de ReadEventsData — ainda sem captura real)
+# ---------------------------------------------------------------------------
+
+def event_page(records, len_rule_plus=1):
+    """Monta uma resposta 0x3900: 8 registros de 15 bytes a partir de [8].
+
+    len_rule_plus: total = len + 1 (como o status) ou len + 7 (como o ACK)."""
+    body = b"".join(records) + bytes([0xFF] + [0] * 14) * (8 - len(records))
+    total = 8 + len(body) + 1
+    ln = total - len_rule_plus
+    frame = bytes([0, 0, 0, 0]) + ln.to_bytes(2, "big") + b"\x39\x00" + body
+    return frame + bytes([c.checksum(frame)])
+
+
+DISPARO_Z1 = bytes([1, 1, 3, 0xA, 0, 1, 0, 0, 1, 27, 10, 26, 9, 30, 5])   # E130, alarme, zona 01
+DESARME_U10 = bytes([1, 4, 0xA, 1, 0, 15, 0, 1, 0, 27, 10, 26, 9, 31, 0])  # E401 qual. 1, ambos
+RESTAURO_Z1 = bytes([3, 1, 3, 0xA, 0, 1, 0, 0, 1, 27, 10, 26, 9, 32, 0])  # R130
+
+
+class TestEventos(unittest.TestCase):
+    def test_parse(self):
+        evs = c.parse_events(event_page([DISPARO_Z1, DESARME_U10, RESTAURO_Z1]))
+        self.assertEqual(len(evs), 3)   # os 5 registros FF são ignorados
+        self.assertEqual(evs[0]["evento"], "Disparo de zona")
+        self.assertEqual(evs[0]["codigo"], "1130")
+        self.assertEqual(evs[0]["particao"], "alarme")
+        self.assertEqual(evs[0]["zona_usuario"], "01")
+        self.assertEqual((evs[0]["data"], evs[0]["hora"]), ("27/10/26", "09:30:05"))
+        self.assertEqual(evs[1]["evento"], "Desarme por usuário")
+        self.assertEqual(evs[1]["particao"], "alarme e choque")
+        self.assertEqual(evs[2]["evento"], "Disparo de zona (restauração)")
+
+    def test_codigo_desconhecido(self):
+        rec = bytes([1, 9, 9, 9, 0, 2] + [0] * 9)
+        ev = c.parse_events(event_page([rec]))[0]
+        self.assertEqual(ev["evento"], "Evento 1999")
+        self.assertEqual(ev["particao"], "choque")
+
+    def test_le_as_8_paginas_nas_duas_regras_de_tamanho(self):
+        for plus in (1, 7):
+            with self.subTest(len_rule=f"len + {plus}"):
+                pages = [event_page([DISPARO_Z1], plus)] + [event_page([], plus)] * 7
+                s = session(*pages)
+                evs = s.events()
+                self.assertEqual([e["pagina"] for e in evs], [0])
+                self.assertEqual(len(s.sock.sent), 8)
+                sent = s.sock.sent[3]
+                self.assertEqual(sent[:4], b"\x00\x00\x00\x00")
+                self.assertEqual(sent[6:9], b"\x39\x00\x03")
+                self.assertEqual(s.sock.buf, b"")   # nada sobrou no socket
+
+    def test_resposta_errada(self):
+        with self.assertRaisesRegex(RuntimeError, "página 0"):
+            session(FRAMES["armado"]).events()
+
+
+# ---------------------------------------------------------------------------
 # Ponte MQTT
 # ---------------------------------------------------------------------------
 

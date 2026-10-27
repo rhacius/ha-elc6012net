@@ -54,6 +54,7 @@ CMD_LOGIN = 0xF0F0            # login na central (senha)
 CMD_FENCE_STATUS = 0x0B4A     # leitura de status do eletrificador
 CMD_ARM_DISARM = 0x401E       # arme/desarme [partição, modo]
 CMD_BYPASS = 0x401F           # bypass [255, z1..z8] (1 byte por zona, 1 = anulada)
+CMD_EVENTS = 0x3900           # buffer de eventos [página 0-7] (não validado ao vivo)
 ACK_OK = 0xF0FE               # ACK do relay (binds)
 NACK = 0xF0FD                 # NACK (erro) — payload[0] = código
 
@@ -167,24 +168,40 @@ class ElcCloudSession:
         buf = b""
         need = 8   # até ler o cabeçalho e o eco
         header = True
-        while len(buf) < need:
-            wait = deadline - time.monotonic()
-            if wait <= 0:
-                break
-            self.sock.settimeout(wait)
-            try:
-                chunk = self.sock.recv(need - len(buf))
-            except socket.timeout:
-                break
-            if not chunk:
-                break
-            buf += chunk
-            if header and len(buf) >= 8:
-                header = False
-                ln = int.from_bytes(buf[4:6], "big")
-                need = ln + 1 if self._echo(buf) == CMD_FENCE_STATUS else ln + 7
-                if need > MAX_FRAME:
-                    raise ConnectionError(f"frame com tamanho inválido ({need} B): {buf.hex(' ')}")
+        alt = None  # outro tamanho possível, enquanto a regra do eco não foi validada
+        while True:
+            while len(buf) < need:
+                wait = deadline - time.monotonic()
+                if wait <= 0:
+                    break
+                self.sock.settimeout(wait)
+                try:
+                    chunk = self.sock.recv(need - len(buf))
+                except socket.timeout:
+                    break
+                if not chunk:
+                    break
+                buf += chunk
+                if header and len(buf) >= 8:
+                    header = False
+                    ln = int.from_bytes(buf[4:6], "big")
+                    echo = self._echo(buf)
+                    if echo == CMD_FENCE_STATUS:
+                        need = ln + 1
+                    elif echo == CMD_EVENTS:
+                        # Regra ainda não vista ao vivo: tenta a do status e, se
+                        # o checksum não fechar, continua lendo até len + 7.
+                        need, alt = ln + 1, ln + 7
+                    else:
+                        need = ln + 7
+                    if need > MAX_FRAME:
+                        raise ConnectionError(f"frame com tamanho inválido ({need} B): {buf.hex(' ')}")
+            if alt and len(buf) == need and checksum(buf[:-1]) != buf[-1]:
+                need, alt = alt, None
+                continue
+            if not header and self._echo(buf) == CMD_EVENTS:
+                self._log(f"eventos: {len(buf)} B recebidos, len={ln}, total esperado={need}")
+            break
         if len(buf) == need and checksum(buf[:-1]) != buf[-1] and self._echo(buf) == NACK:
             # O relay não conta o código de erro no len do NACK: o que parecia o
             # checksum é o código ([8]) e o checksum real vem em seguida.
@@ -319,6 +336,24 @@ class ElcCloudSession:
         """Arma/desarma só o alarme (partição 1), sem mexer no choque."""
         return self.arm(PARTITION_ALARM) if on else self.disarm(PARTITION_ALARM)
 
+    def events(self) -> list[dict]:
+        """Lê o buffer de eventos do painel: 8 páginas (0x3900 [0..7]).
+
+        Como o app (GeneralEventsElc6012NetDataSource): pacote com marker
+        00 00 00 00, resposta com eco 0x3900. A ordem do buffer ainda não foi
+        vista ao vivo — os eventos voltam na ordem das páginas."""
+        out = []
+        for page in range(EVENT_PAGES):
+            resp = self._xchg(packet8000(CMD_EVENTS, bytes([page]), marker=b"\x00\x00\x00\x00"),
+                              timeout=20.0)
+            if self._echo(resp) != CMD_EVENTS:
+                raise RuntimeError(f"resposta inválida na página {page} de eventos: {resp.hex(' ')}")
+            self._log(f"eventos página {page}: {resp.hex(' ')}")
+            for ev in parse_events(resp):
+                ev["pagina"] = page
+                out.append(ev)
+        return out
+
     def set_bypass(self, zone: int, on: bool) -> dict:
         """Anula (on=True) ou reativa uma zona. A resposta já é o novo status.
 
@@ -386,6 +421,10 @@ class Elc6012Client:
         with ElcCloudSession(self.mac, self.password, verbose=self.verbose) as s:
             return s.set_bypass(zone, on)
 
+    def events(self) -> list[dict]:
+        with ElcCloudSession(self.mac, self.password, verbose=self.verbose) as s:
+            return s.events()
+
 
 # ---------------------------------------------------------------------------
 # Descoberta local (porta 9009 do ELC — somente sondas, sem controle)
@@ -414,6 +453,65 @@ def discover_local(host: str, port: int = LOCAL_PORT, timeout: float = 4.0) -> t
     model_resp = probe(bytes([0x01, 0xC2, 0x3C]))
     model = model_resp[2] if len(model_resp) >= 3 and model_resp[1] == 0xC2 else -1
     return mac, model
+
+
+# ---------------------------------------------------------------------------
+# Eventos (ElcInterpreterInformation.ReadEventsData — não validado ao vivo)
+# ---------------------------------------------------------------------------
+
+EVENT_PAGES = 8
+EVENT_RECORD = 15     # bytes por registro; 8 registros por página, a partir de [8]
+EVENT_END = 128       # o app lê registros enquanto o início for < 128
+
+# Códigos Contact ID do ELC (Elc6012Net.EVENTS_TRANSLATED). Um dígito por byte,
+# com 0 escrito como A; chave com 4 dígitos (qualificador + evento) e, na falta
+# dela, só os 3 do evento. Nomes traduzidos das chaves de recurso do app.
+EVENT_NAMES = {
+    "4A1": "Arme/desarme por usuário", "14A1": "Desarme por usuário", "34A1": "Arme por usuário",
+    "4A7": "Arme/desarme remoto", "14A7": "Desarme remoto", "34A7": "Arme remoto",
+    "4A3": "Arme/desarme automático", "14A3": "Arme automático", "34A3": "Desarme automático",
+    "456": "Arme stay", "1456": "Desarme stay", "3456": "Arme stay",
+    "57A": "Bypass de zona", "13A": "Disparo de zona", "133": "Disparo de zona 24h",
+    "12A": "Pânico audível", "122": "Pânico silencioso", "146": "Pânico silencioso",
+    "384": "Bateria baixa de sensor", "3A1": "Falta de energia elétrica (AC)",
+    "342": "Falha de AC no módulo de expansão", "145": "Tamper do módulo de expansão",
+    "422": "Acionamento de PGM", "3A6": "Alteração de programação", "41A": "Acesso por download",
+    "3A5": "Reset do sistema", "461": "Senha incorreta", "6A1": "Teste manual",
+    "6A2": "Teste periódico", "621": "Reset do buffer de eventos", "625": "Reset de data/hora",
+    "616": "Solicitação de manutenção", "354": "Falha ao reportar evento", "4A8": "Arme rápido",
+}
+EVENT_PARTITIONS = {1: "alarme", 2: "choque", 15: "alarme e choque"}
+
+
+def parse_events(resp: bytes) -> list[dict]:
+    """Registros de uma página de eventos (resposta do 0x3900).
+
+    Registro de 15 bytes: [0..3] dígitos Contact ID, [5] partição,
+    [7..8] zona/usuário, [9..11] dia/mês/ano, [12..14] hora/min/seg.
+    Registro começando com FF = vazio."""
+    events = []
+    for i in range(8, min(EVENT_END, len(resp) - 1), EVENT_RECORD):
+        rec = resp[i:i + EVENT_RECORD]
+        if len(rec) < EVENT_RECORD or rec[0] == 0xFF:
+            continue
+        digits = "".join(f"{d:X}" for d in rec[:4])
+        full, short = digits.lstrip("0") or "0", f"{rec[1]:X}{rec[2]:X}{rec[3]:X}"
+        name = EVENT_NAMES.get(full) or EVENT_NAMES.get(short)
+        if name and full not in EVENT_NAMES and rec[0] == 3:
+            name += " (restauração)"
+        partition = rec[5]
+        if partition == 1 and int(digits, 16) == 0x1131:   # caso especial do app
+            partition = 2
+        events.append({
+            "codigo": digits.replace("A", "0"),   # Contact ID legível, ex.: 1130
+            "evento": name or f"Evento {digits.replace('A', '0')}",
+            "particao": EVENT_PARTITIONS.get(partition, str(partition)),
+            "zona_usuario": f"{rec[7]}{rec[8]}",
+            "data": f"{rec[9]:02d}/{rec[10]:02d}/{rec[11]:02d}",
+            "hora": f"{rec[12]:02d}:{rec[13]:02d}:{rec[14]:02d}",
+            "bruto": rec.hex(" "),
+        })
+    return events
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +589,8 @@ def main():
                     help="senha do eletrificador (padrão: variável ELC_PASSWORD)")
     ap.add_argument("--verbose", "-v", action="store_true")
     ap.add_argument("comando", choices=["probe", "status", "arm", "disarm", "shock-on", "shock-off",
-                                           "alarm-on", "alarm-off", "bypass", "unbypass"])
+                                           "alarm-on", "alarm-off", "bypass", "unbypass",
+                                           "events"])
     ap.add_argument("zona", nargs="?", type=int,
                     help=f"zona (1-{NUM_ZONES}) para bypass/unbypass")
     ns = ap.parse_args()
@@ -544,6 +643,15 @@ def main():
         print(("ALARME " + ("ARMADO" if on else "DESARMADO")) if ok
               else "FALHA: painel não confirmou o alarme")
         print(f"Choque na cerca   : {'SIM' if st['choque'] else 'NÃO'}")
+    elif ns.comando == "events":
+        evs = cli.events()
+        for ev in evs:
+            print(f"{ev['data']} {ev['hora']}  {ev['evento']:<34} {ev['particao']:<16} "
+                  f"zona/usuário {ev['zona_usuario']:<4} [{ev['codigo']}] pág {ev['pagina']}")
+            if ns.verbose:
+                print(f"    {ev['bruto']}")
+        print(f"{len(evs)} evento(s)")
+        return
     elif ns.comando in ("bypass", "unbypass"):
         on = ns.comando == "bypass"
         st = cli.set_bypass(ns.zona, on)
