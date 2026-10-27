@@ -155,14 +155,18 @@ class ElcCloudSession:
         """Envia e lê exatamente um frame de resposta.
 
         O relay não fecha a conexão, então o fim do frame vem do campo de
-        tamanho: total = 4 (prefixo) + 2 (len) + len + 1 (checksum), onde len
-        (BE em [4..5]) já inclui os 2 bytes do comando. Lê só esses bytes —
-        um frame seguinte fica no socket em vez de se misturar a este.
-        Em timeout, devolve o que chegou (os chamadores rejeitam pelo eco)."""
+        tamanho len (BE em [4..5]), cuja regra depende do eco ([6..7]):
+          - ACK/login/NACK: total = 4 (prefixo) + 2 (len) + len + 1 (checksum),
+            com len incluindo os 2 bytes do comando;
+          - status 0x0B4A: total = len + 1 (len=0xA4 em frames de 165 bytes).
+        Lê só esses bytes — um frame seguinte fica no socket em vez de se
+        misturar a este. Em timeout, devolve o que chegou (os chamadores
+        rejeitam pelo eco)."""
         self.sock.sendall(data)
         deadline = time.monotonic() + (timeout or self.timeout)
         buf = b""
-        need = 6   # até ler o cabeçalho
+        need = 8   # até ler o cabeçalho e o eco
+        header = True
         while len(buf) < need:
             wait = deadline - time.monotonic()
             if wait <= 0:
@@ -175,8 +179,10 @@ class ElcCloudSession:
             if not chunk:
                 break
             buf += chunk
-            if need == 6 and len(buf) >= 6:
-                need = int.from_bytes(buf[4:6], "big") + 7
+            if header and len(buf) >= 8:
+                header = False
+                ln = int.from_bytes(buf[4:6], "big")
+                need = ln + 1 if self._echo(buf) == CMD_FENCE_STATUS else ln + 7
                 if need > MAX_FRAME:
                     raise ConnectionError(f"frame com tamanho inválido ({need} B): {buf.hex(' ')}")
         if len(buf) == need and checksum(buf[:-1]) != buf[-1] and self._echo(buf) == NACK:

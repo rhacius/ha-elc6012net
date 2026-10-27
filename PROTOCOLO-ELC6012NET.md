@@ -68,7 +68,8 @@ chk = XOR de todos os bytes anteriores; chk ^= 0xFF
 ### 2.5 Respostas do relay
 ```
 byte 0..3 : prefixo do relay (00 00 00 00 / 00 01 00 00 — varia; ignorar)
-byte 4..5 : len BE
+byte 4..5 : len BE   (ACK/login/NACK: total = len + 7; status 0x0B4A: total = len + 1,
+                     ex.: len=0xA4 em frames de 165 bytes — o tamanho depende do eco)
 byte 6..7 : eco do comando (ou F0FE=ACK de bind, F0FD=NACK/erro)
 byte 8..  : payload (no NACK: [8] = código de erro)
 último    : checksum
@@ -124,6 +125,7 @@ Resposta de 165 bytes (offsets incluem os 4 bytes de prefixo do relay):
 | `[72..77]` | dia, mês, ano, hora, min, seg (relógio do painel) |
 | `[79]` bit0 | alimentação: 1 = bateria (`ACTIVE_BATTERY`), 0 = rede AC (`AC_POWER_OK`) — da decompilação, não validado |
 | `[145]` bits 0/1 | PGM 1 / PGM 2 ligada — da decompilação, não validado |
+| `[157..162]` | MAC do ELC (validado) |
 | `[163]` | sinal: `<=37 -> 100%`; senão `174 - 2*v` % |
 | `[164]` | checksum |
 

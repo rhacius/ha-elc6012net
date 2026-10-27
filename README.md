@@ -139,7 +139,17 @@ automation:
 5. arme/desarme `0x401E` `[255, modo]` (modo 1/0) → novo status;
 6. checksum = XOR de todos os bytes `^ 0xFF`.
 
-## 5. Solução de problemas
+## 5. Testes
+
+```bash
+python3 -m unittest -v        # na raiz do projeto
+```
+
+Usam respostas reais do ELC (`tests/frames.py`, com o MAC trocado por um
+fictício) e sockets simulados — não acessam a nuvem nem o painel. Os testes da
+ponte exigem o `paho-mqtt` (sem ele são pulados).
+
+## 6. Solução de problemas
 
 | Sintoma | Causa provável | Ação |
 |---|---|---|
