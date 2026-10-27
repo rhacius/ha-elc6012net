@@ -1,0 +1,25 @@
+name: ELC 6012 NET
+version: "1.0.0"
+slug: elc6012_mqtt
+url: https://github.com/rhacius/ha-elc6012net
+description: Ponte do eletrificador Intelbras ELC 6012 NET para o Home Assistant via MQTT
+arch:
+  - aarch64
+  - amd64
+  - armv7
+init: false
+startup: application
+boot: auto
+# Credenciais do broker vêm do Supervisor (add-on Mosquitto): nada a configurar.
+services:
+  - mqtt:need
+options:
+  mac: ""
+  password: ""
+  poll: 60
+  prefix: elc6012
+schema:
+  mac: match(^([0-9A-Fa-f]{2}[:-]?){5}[0-9A-Fa-f]{2}$)
+  password: password
+  poll: int(30,600)
+  prefix: str

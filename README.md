@@ -15,6 +15,24 @@ elc6012_ha_mqtt.py ──HTTPS/TCP──> nuvem Intelbras (relay amt8000) ──
 > ponte precisa de acesso à internet, do **MAC** do ELC e da **senha** cadastrada
 > no app Guardian. Detalhes do protocolo: `PROTOCOLO-ELC6012NET.md`.
 
+> **Aviso:** projeto independente, sem vínculo com a Intelbras. O protocolo foi
+> obtido por engenharia reversa do app Guardian para fins de interoperabilidade
+> e pode mudar sem aviso. Ele controla uma cerca elétrica real — use por sua
+> conta e risco.
+
+## Instalação como add-on (Home Assistant OS / Supervised)
+
+[![Adicionar repositório ao Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Frhacius%2Fha-elc6012net)
+
+1. Configurações → Add-ons → Loja → ⋮ → **Repositórios** → adicione
+   `https://github.com/rhacius/ha-elc6012net` (ou use o botão acima).
+2. Instale o add-on **ELC 6012 NET** (é compilado no próprio HA; leva alguns minutos).
+3. Na aba **Configuração**, informe o `mac` do ELC e a `password` do app Guardian.
+4. Inicie. O dispositivo aparece na integração **MQTT** (requer o add-on
+   Mosquitto; as credenciais do broker são obtidas automaticamente).
+
+As seções abaixo descrevem o uso sem add-on (CLI e ponte standalone).
+
 ## Arquivos
 
 | Arquivo | Função |
@@ -22,6 +40,9 @@ elc6012_ha_mqtt.py ──HTTPS/TCP──> nuvem Intelbras (relay amt8000) ──
 | `PROTOCOLO-ELC6012NET.md` | Especificação do protocolo (engenharia reversa + validação ao vivo) |
 | `elc6012_client.py` | Biblioteca/CLI (stdlib pura) — teste antes de tudo! |
 | `elc6012_ha_mqtt.py` | Ponte MQTT com auto-descoberta para o HA |
+| `elc6012_mqtt/` | Add-on do HA (os dois `.py` da raiz são links para o código daqui) |
+| `repository.yaml` | Torna o repositório instalável pela loja de add-ons |
+| `tests/` | Testes com respostas reais do ELC (`python3 -m unittest`) |
 | `crc_table_2018.txt` | Tabela CRC do formato 2018 (referência; o ELC não usa na nuvem) |
 
 ## 1. Descobrir o MAC e testar
@@ -122,7 +143,7 @@ automation:
   - alias: Desarma a cerca quando alguém chega em casa
     trigger:
       platform: state
-      entity_id: person.rhacius
+      entity_id: person.fulano
       to: "home"
     action:
       service: alarm_control_panel.alarm_disarm
