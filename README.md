@@ -51,7 +51,7 @@ As seções abaixo descrevem o uso sem add-on (CLI e ponte standalone).
 pip3 install -r requirements.txt   # só a ponte precisa; o cliente é stdlib pura
 
 # Descoberta local (o ELC deve estar na mesma rede):
-python3 elc6012_client.py --host 192.168.3.235 probe
+python3 elc6012_client.py --host IP_DO_ELC probe
 #   -> MAC: 00:1A:3F:12:34:56   Modelo: 0x35 (ELC 6012 NET)
 
 # Controle via nuvem (MAC sem ':' e a senha do app Guardian). A senha vai por
@@ -77,9 +77,9 @@ python3 elc6012_ha_mqtt.py --mac 001A3F123456 \
     --mqtt IP_DO_BROKER --mqtt-user USUARIO --poll 60
 ```
 
-Comandos de arme/desarme vindos do HA entram numa fila e são executados pelo
-mesmo loop do polling, uma sessão cloud por vez. Comandos publicados com
-*retain* no tópico `elc6012/alarm/set` são ignorados. Se um comando falhar (ex.:
+Comandos vindos do HA (arme/desarme, choque, bypass) entram numa fila e são
+executados pelo mesmo loop do polling, uma sessão cloud por vez. Comandos
+publicados com *retain* são ignorados. Se um comando falhar (ex.:
 NACK do painel), a ponte não fica indisponível: ela registra o erro e faz um
 poll imediato para ressincronizar o estado.
 
@@ -94,8 +94,7 @@ valem na criação da entidade; versões anteriores prefixam o nome do
 dispositivo (ex.: `alarm_control_panel.elc_6012_net_cerca_eletrica`):
 
 - **`alarm_control_panel.cerca_eletrica`** — ARMAR (away) / DESARMAR (único modo
-  oferecido no HA);
-  estado `triggered` quando houver zona disparada
+  oferecido no HA); estado `triggered` quando houver zona disparada.
   O estado segue **só o alarme** (o alarme pode estar armado com o choque
   desligado). ARMAR/DESARMAR aqui aciona alarme **e** choque juntos (partição 255).
 - **`switch.choque`** — liga/desliga **só o choque** (o alarme não muda), como o
@@ -257,14 +256,17 @@ automation:
         entity_id: alarm_control_panel.cerca_eletrica
 ```
 
-## 4. O protocolo em 6 linhas
+## 4. O protocolo em 7 linhas
 
 1. `amt.intelbras.com.br:9009`: `CloudPacket(0xE5, [04,MAC,00,01,MAC,00x5])` → `FD`;
 2. `amt8000.intelbras.com.br:9009`: bind appID `0x30F6` → `F0FE`; bind MAC `0xFFF0` → `F0FE`;
 3. login `0xF0F0` `[01, senha6, 10 00]` (senha: 1 dígito = 1 byte hex) → erro 0;
-4. status `0x0B4A` (marker `00 00 8F FF`) → 165 B (`[30].0`=choque, `[31].0`=armado);
-5. arme/desarme `0x401E` `[255, modo]` (modo 1/0) → novo status;
-6. checksum = XOR de todos os bytes `^ 0xFF`.
+4. status `0x0B4A` (marker `00 00 8F FF`) → 165 B (`[30].0`=choque, `[31].0`=alarme,
+   `[62]`=zonas em bypass);
+5. arme/desarme `0x401E` `[partição, modo]` (modo 1/0; partição 255 = alarme + choque,
+   1 = só alarme, 2 = só choque) → novo status;
+6. bypass `0x401F` `[255, z1..z8]` (1 byte por zona; define todas de uma vez) → novo status;
+7. checksum = XOR de todos os bytes `^ 0xFF`.
 
 ## 5. Testes
 
@@ -283,7 +285,9 @@ ponte exigem o `paho-mqtt` (sem ele são pulados).
 | `probe` sem resposta | IP errado / fora da LAN | `nc -vz <ip> 9009` |
 | "painel não está conectado à nuvem" | ELC offline no relay | verificar internet do ELC no app Guardian |
 | login código 25 | senha errada | usar a senha do app Guardian |
-| NACK código 33 (0x21) | partição errada | o ELC usa partição **255** (já é o padrão) |
+| NACK código 33 (0x21) | partição inexistente ou sem login | partições válidas: 255, 1 e 2 (o cliente já usa as certas) |
+| login NACK código 50 | sessões demais em pouco tempo (rate limiting) | aguarde ~1 min entre comandos |
+| `bypass` recusado | alarme armado | desarme o alarme antes de anular/reativar zonas |
 | Estado OFF/unavailable intermitente | relay fecha conexão ociosa | normal — a ponte abre sessão nova a cada ciclo |
 | Tudo "unavailable" de repente | ponte morreu sem LWT | já tratado: a ponte registra LWT (will) no broker |
 | Conflito com o app no celular | relay pode priorizar uma sessão | feche o app Guardian se notar falhas de comando |

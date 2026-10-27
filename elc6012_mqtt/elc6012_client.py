@@ -22,7 +22,7 @@ ver PROTOCOLO-ELC6012NET.md.
 
 Uso:
   # Descoberta local (rede local, sem senha):
-  python3 elc6012_client.py --host 192.168.3.235 probe
+  python3 elc6012_client.py --host IP_DO_ELC probe
 
   # Controle via nuvem (requer MAC + senha do eletrificador). A senha vem de
   # ELC_PASSWORD (preferível: não aparece no `ps`) ou de --password:
@@ -485,7 +485,7 @@ def print_status(st: dict):
 
 def main():
     ap = argparse.ArgumentParser(description="Cliente ELC 6012 NET (protocolo Guardian)")
-    ap.add_argument("--host", default="192.168.3.235", help="IP local (só para 'probe')")
+    ap.add_argument("--host", help="IP do ELC na rede local (só para 'probe')")
     ap.add_argument("--mac", default="", help="MAC do ELC (ex.: 001A3F123456)")
     ap.add_argument("--password", default=os.environ.get("ELC_PASSWORD", ""),
                     help="senha do eletrificador (padrão: variável ELC_PASSWORD)")
@@ -499,6 +499,8 @@ def main():
         ap.error(f"{ns.comando} precisa da zona (1-{NUM_ZONES}), ex.: bypass 3")
 
     if ns.comando == "probe":
+        if not ns.host:
+            ap.error("probe precisa do IP do ELC: --host IP_DO_ELC")
         mac, model = discover_local(ns.host)
         print(f"MAC    : {mac}")
         print(f"Modelo : 0x{model:02X} ({'ELC 6012 NET' if model == 0x35 else 'desconhecido'})")
