@@ -68,3 +68,23 @@ NACK_LOGIN = NACK_LOGIN_TRUNCADO + bytes([0xC0])
 # Sondas de descoberta local (PROTOCOLO-ELC6012NET.md §2.7, MAC fictício).
 PROBE_MAC = bytes.fromhex("07 c4 00 1a 3f 12 34 56 69")
 PROBE_MODELO = bytes.fromhex("02 c2 35 0a")
+
+# Páginas reais do buffer de eventos (0x3900), 27/out/2026. Sempre 129 bytes,
+# embora o len diga 0x82. Página 0 = mais recentes. Sem dados do aparelho.
+# página 0: 8x 'Acesso por download' (1410) — um por poll da ponte
+EVENTOS_PAG0 = bytes.fromhex(
+    "00 01 00 00 00 82 39 00 01 04 01 0a 00 00 00 00 00 1b 0a 1a 0b 16 28 01 04 01 0a 00 00 00 "
+    "00 00 1b 0a 1a 0b 15 2c 01 04 01 0a 00 00 00 00 00 1b 0a 1a 0b 14 31 01 04 01 0a 00 00 00 "
+    "00 00 1b 0a 1a 0b 13 35 01 04 01 0a 00 00 00 00 00 1b 0a 1a 0b 12 39 01 04 01 0a 00 00 00 "
+    "00 00 1b 0a 1a 0b 12 02 01 04 01 0a 00 00 00 00 00 1b 0a 1a 0b 11 06 01 04 01 0a 00 00 00 "
+    "00 00 1b 0a 1a 0b 10 0a 77 "
+)
+
+# página 7: arme/desarme remoto de alarme e choque dos testes ao vivo
+EVENTOS_PAG7 = bytes.fromhex(
+    "00 01 00 00 00 82 39 00 01 04 01 0a 00 00 00 00 00 1b 0a 1a 09 25 0a 03 04 0a 07 00 02 00 "
+    "00 00 1b 0a 1a 09 1d 05 01 04 01 0a 00 00 00 00 00 1b 0a 1a 09 1c 04 01 04 0a 07 00 01 00 "
+    "00 00 1b 0a 1a 09 1b 34 01 04 01 0a 00 00 00 00 00 1b 0a 1a 09 1b 25 03 04 0a 07 00 01 00 "
+    "00 00 1b 0a 1a 09 1b 18 01 04 01 0a 00 00 00 00 00 1b 0a 1a 09 1b 14 01 04 0a 07 00 02 00 "
+    "00 00 1b 0a 1a 09 1b 07 6b "
+)

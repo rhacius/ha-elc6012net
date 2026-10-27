@@ -54,7 +54,7 @@ CMD_LOGIN = 0xF0F0            # login na central (senha)
 CMD_FENCE_STATUS = 0x0B4A     # leitura de status do eletrificador
 CMD_ARM_DISARM = 0x401E       # arme/desarme [partição, modo]
 CMD_BYPASS = 0x401F           # bypass [255, z1..z8] (1 byte por zona, 1 = anulada)
-CMD_EVENTS = 0x3900           # buffer de eventos [página 0-7] (não validado ao vivo)
+CMD_EVENTS = 0x3900           # buffer de eventos [página 0-7]
 ACK_OK = 0xF0FE               # ACK do relay (binds)
 NACK = 0xF0FD                 # NACK (erro) — payload[0] = código
 
@@ -159,7 +159,8 @@ class ElcCloudSession:
         tamanho len (BE em [4..5]), cuja regra depende do eco ([6..7]):
           - ACK/login/NACK: total = 4 (prefixo) + 2 (len) + len + 1 (checksum),
             com len incluindo os 2 bytes do comando;
-          - status 0x0B4A: total = len + 1 (len=0xA4 em frames de 165 bytes).
+          - status 0x0B4A: total = len + 1 (len=0xA4 em frames de 165 bytes);
+          - eventos 0x3900: sempre 129 bytes (o len vem 0x82 — não confere).
         Lê só esses bytes — um frame seguinte fica no socket em vez de se
         misturar a este. Em timeout, devolve o que chegou (os chamadores
         rejeitam pelo eco)."""
@@ -168,40 +169,30 @@ class ElcCloudSession:
         buf = b""
         need = 8   # até ler o cabeçalho e o eco
         header = True
-        alt = None  # outro tamanho possível, enquanto a regra do eco não foi validada
-        while True:
-            while len(buf) < need:
-                wait = deadline - time.monotonic()
-                if wait <= 0:
-                    break
-                self.sock.settimeout(wait)
-                try:
-                    chunk = self.sock.recv(need - len(buf))
-                except socket.timeout:
-                    break
-                if not chunk:
-                    break
-                buf += chunk
-                if header and len(buf) >= 8:
-                    header = False
-                    ln = int.from_bytes(buf[4:6], "big")
-                    echo = self._echo(buf)
-                    if echo == CMD_FENCE_STATUS:
-                        need = ln + 1
-                    elif echo == CMD_EVENTS:
-                        # Regra ainda não vista ao vivo: tenta a do status e, se
-                        # o checksum não fechar, continua lendo até len + 7.
-                        need, alt = ln + 1, ln + 7
-                    else:
-                        need = ln + 7
-                    if need > MAX_FRAME:
-                        raise ConnectionError(f"frame com tamanho inválido ({need} B): {buf.hex(' ')}")
-            if alt and len(buf) == need and checksum(buf[:-1]) != buf[-1]:
-                need, alt = alt, None
-                continue
-            if not header and self._echo(buf) == CMD_EVENTS:
-                self._log(f"eventos: {len(buf)} B recebidos, len={ln}, total esperado={need}")
-            break
+        while len(buf) < need:
+            wait = deadline - time.monotonic()
+            if wait <= 0:
+                break
+            self.sock.settimeout(wait)
+            try:
+                chunk = self.sock.recv(need - len(buf))
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            buf += chunk
+            if header and len(buf) >= 8:
+                header = False
+                ln = int.from_bytes(buf[4:6], "big")
+                echo = self._echo(buf)
+                if echo == CMD_FENCE_STATUS:
+                    need = ln + 1
+                elif echo == CMD_EVENTS:
+                    need = EVENT_FRAME   # o len (0x82) não bate com o tamanho real
+                else:
+                    need = ln + 7
+                if need > MAX_FRAME:
+                    raise ConnectionError(f"frame com tamanho inválido ({need} B): {buf.hex(' ')}")
         if len(buf) == need and checksum(buf[:-1]) != buf[-1] and self._echo(buf) == NACK:
             # O relay não conta o código de erro no len do NACK: o que parecia o
             # checksum é o código ([8]) e o checksum real vem em seguida.
@@ -340,8 +331,11 @@ class ElcCloudSession:
         """Lê o buffer de eventos do painel: 8 páginas (0x3900 [0..7]).
 
         Como o app (GeneralEventsElc6012NetDataSource): pacote com marker
-        00 00 00 00, resposta com eco 0x3900. A ordem do buffer ainda não foi
-        vista ao vivo — os eventos voltam na ordem das páginas."""
+        00 00 00 00, resposta com eco 0x3900. Página 0 = eventos mais novos;
+        a lista volta do mais novo para o mais antigo (validado ao vivo).
+
+        Cada login na nuvem grava um "Acesso por download" (1410) no buffer
+        de 64 eventos — o polling da ponte também."""
         out = []
         for page in range(EVENT_PAGES):
             resp = self._xchg(packet8000(CMD_EVENTS, bytes([page]), marker=b"\x00\x00\x00\x00"),
@@ -456,12 +450,13 @@ def discover_local(host: str, port: int = LOCAL_PORT, timeout: float = 4.0) -> t
 
 
 # ---------------------------------------------------------------------------
-# Eventos (ElcInterpreterInformation.ReadEventsData — não validado ao vivo)
+# Eventos (ElcInterpreterInformation.ReadEventsData, validado ao vivo)
 # ---------------------------------------------------------------------------
 
 EVENT_PAGES = 8
 EVENT_RECORD = 15     # bytes por registro; 8 registros por página, a partir de [8]
 EVENT_END = 128       # o app lê registros enquanto o início for < 128
+EVENT_FRAME = 129     # 8 (cabeçalho) + 8 x 15 + 1 (checksum)
 
 # Códigos Contact ID do ELC (Elc6012Net.EVENTS_TRANSLATED). Um dígito por byte,
 # com 0 escrito como A; chave com 4 dígitos (qualificador + evento) e, na falta
@@ -480,7 +475,7 @@ EVENT_NAMES = {
     "6A2": "Teste periódico", "621": "Reset do buffer de eventos", "625": "Reset de data/hora",
     "616": "Solicitação de manutenção", "354": "Falha ao reportar evento", "4A8": "Arme rápido",
 }
-EVENT_PARTITIONS = {1: "alarme", 2: "choque", 15: "alarme e choque"}
+EVENT_PARTITIONS = {0: "—", 1: "alarme", 2: "choque", 15: "alarme e choque"}
 
 
 def parse_events(resp: bytes) -> list[dict]:

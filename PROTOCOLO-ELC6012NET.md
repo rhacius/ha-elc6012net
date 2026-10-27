@@ -168,12 +168,13 @@ zonas habilitadas, 39=zonas abertas, 42=operação negada, 46/54/63/68/70=outros
 zona com a cerca desarmada. Para armar com uma zona com defeito: desarmar →
 anular a zona → armar. O estado de bypass aparece no status em `[62..63]`.
 
-## 6.1 Buffer de eventos (comando 0x3900) — da decompilação, NÃO validado ao vivo
+## 6.1 Buffer de eventos (comando 0x3900) — validado ao vivo (27/out/2026)
 
 `GeneralEventsElc6012NetDataSource.ReadData` lê **8 páginas**: `Packet(0x3900, [página])`
 (marker `00 00 00 00`), página 0–7; resposta com eco `0x3900`, interpretada por
-`ElcInterpreterInformation.ReadEventsData`. Ainda não se sabe se o `len` segue a
-regra do status (total = len + 1) ou a dos ACKs (len + 7) — o cliente aceita as duas.
+`ElcInterpreterInformation.ReadEventsData`. A resposta tem **sempre 129 bytes**
+(8 + 8 × 15 + 1), embora o `len` venha `0x82` (130) — não segue nem a regra do
+status nem a dos ACKs; leia pelo tamanho fixo.
 
 Cada página traz até 8 registros de **15 bytes**, a partir de `[8]` (o app lê
 enquanto o início do registro for < 128). Registro começando com `FF` = vazio.
@@ -190,7 +191,14 @@ Nomes (`Elc6012Net.EVENTS_TRANSLATED`): procura primeiro a chave de 4 dígitos
 (com o qualificador — ex.: `14A1` desarme por usuário, `34A1` arme por usuário) e
 depois a de 3 (ex.: `13A` disparo de zona, `57A` bypass, `3A1` falta de AC,
 `461` senha incorreta, `422` PGM). Lista completa em `EVENT_NAMES` no cliente.
-Ordem do buffer (circular? página 0 = mais recente?) a confirmar ao vivo.
+**Página 0 = eventos mais recentes**; dentro de cada página, do mais novo para o
+mais antigo. Buffer de **64 eventos**.
+
+**Cada login na nuvem grava "Acesso por download" (E410)** — inclusive cada poll
+da ponte. Com polling de 60 s, o buffer cobre só ~1 h e os eventos reais (arme,
+desarme, disparo) saem dele rapidamente, também do histórico do app Guardian.
+Validado: arme/desarme remoto aparecem como `34A7`/`14A7` com a partição certa
+(1 = alarme, 2 = choque).
 
 ## 7. Senha em pares (formato 2018 — identify/handshake)
 

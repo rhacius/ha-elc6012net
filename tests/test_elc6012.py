@@ -11,7 +11,8 @@ import unittest
 
 import elc6012_client as c
 
-from .frames import FRAMES, NACK_LOGIN, NACK_LOGIN_TRUNCADO, PROBE_MAC, PROBE_MODELO
+from .frames import (EVENTOS_PAG0, EVENTOS_PAG7, FRAMES, NACK_LOGIN, NACK_LOGIN_TRUNCADO,
+                     PROBE_MAC, PROBE_MODELO)
 
 try:
     import elc6012_ha_mqtt as bridge_mod
@@ -257,56 +258,60 @@ class TestBypass(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Eventos (página SINTÉTICA no formato de ReadEventsData — ainda sem captura real)
+# Eventos (páginas reais + registros sintéticos para casos não vistos)
 # ---------------------------------------------------------------------------
 
-def event_page(records, len_rule_plus=1):
-    """Monta uma resposta 0x3900: 8 registros de 15 bytes a partir de [8].
-
-    len_rule_plus: total = len + 1 (como o status) ou len + 7 (como o ACK)."""
+def event_page(records):
+    """Página 0x3900 no formato real (len=0x82, 129 bytes), com registros dados."""
     body = b"".join(records) + bytes([0xFF] + [0] * 14) * (8 - len(records))
-    total = 8 + len(body) + 1
-    ln = total - len_rule_plus
-    frame = bytes([0, 0, 0, 0]) + ln.to_bytes(2, "big") + b"\x39\x00" + body
+    frame = bytes.fromhex("00 01 00 00 00 82 39 00") + body
     return frame + bytes([c.checksum(frame)])
 
 
+# Registros sintéticos para casos que ainda não apareceram ao vivo.
 DISPARO_Z1 = bytes([1, 1, 3, 0xA, 0, 1, 0, 0, 1, 27, 10, 26, 9, 30, 5])   # E130, alarme, zona 01
-DESARME_U10 = bytes([1, 4, 0xA, 1, 0, 15, 0, 1, 0, 27, 10, 26, 9, 31, 0])  # E401 qual. 1, ambos
 RESTAURO_Z1 = bytes([3, 1, 3, 0xA, 0, 1, 0, 0, 1, 27, 10, 26, 9, 32, 0])  # R130
 
 
 class TestEventos(unittest.TestCase):
-    def test_parse(self):
-        evs = c.parse_events(event_page([DISPARO_Z1, DESARME_U10, RESTAURO_Z1]))
-        self.assertEqual(len(evs), 3)   # os 5 registros FF são ignorados
-        self.assertEqual(evs[0]["evento"], "Disparo de zona")
-        self.assertEqual(evs[0]["codigo"], "1130")
-        self.assertEqual(evs[0]["particao"], "alarme")
-        self.assertEqual(evs[0]["zona_usuario"], "01")
-        self.assertEqual((evs[0]["data"], evs[0]["hora"]), ("27/10/26", "09:30:05"))
-        self.assertEqual(evs[1]["evento"], "Desarme por usuário")
-        self.assertEqual(evs[1]["particao"], "alarme e choque")
-        self.assertEqual(evs[2]["evento"], "Disparo de zona (restauração)")
+    def test_pagina_real_com_comandos(self):
+        evs = c.parse_events(EVENTOS_PAG7)
+        self.assertEqual(len(evs), 8)
+        self.assertEqual([(e["evento"], e["particao"], e["hora"]) for e in evs if e["codigo"] != "1410"], [
+            ("Arme remoto", "choque", "09:29:05"),
+            ("Desarme remoto", "alarme", "09:27:52"),
+            ("Arme remoto", "alarme", "09:27:24"),
+            ("Desarme remoto", "choque", "09:27:07"),
+        ])
+        self.assertEqual(evs[0]["data"], "27/10/26")
 
-    def test_codigo_desconhecido(self):
+    def test_pagina_real_de_acessos(self):
+        evs = c.parse_events(EVENTOS_PAG0)
+        self.assertEqual({e["evento"] for e in evs}, {"Acesso por download"})
+        self.assertEqual(evs[0]["particao"], "—")
+        self.assertEqual(evs[0]["hora"], "11:22:40")
+        self.assertEqual(evs[-1]["hora"], "11:16:10")   # mais novo primeiro
+
+    def test_sinteticos(self):
+        evs = c.parse_events(event_page([DISPARO_Z1, RESTAURO_Z1]))
+        self.assertEqual(len(evs), 2)   # os registros FF são ignorados
+        self.assertEqual((evs[0]["evento"], evs[0]["codigo"], evs[0]["zona_usuario"]),
+                         ("Disparo de zona", "1130", "01"))
+        self.assertEqual(evs[1]["evento"], "Disparo de zona (restauração)")
         rec = bytes([1, 9, 9, 9, 0, 2] + [0] * 9)
-        ev = c.parse_events(event_page([rec]))[0]
-        self.assertEqual(ev["evento"], "Evento 1999")
-        self.assertEqual(ev["particao"], "choque")
+        self.assertEqual(c.parse_events(event_page([rec]))[0]["evento"], "Evento 1999")
 
-    def test_le_as_8_paginas_nas_duas_regras_de_tamanho(self):
-        for plus in (1, 7):
-            with self.subTest(len_rule=f"len + {plus}"):
-                pages = [event_page([DISPARO_Z1], plus)] + [event_page([], plus)] * 7
-                s = session(*pages)
-                evs = s.events()
-                self.assertEqual([e["pagina"] for e in evs], [0])
-                self.assertEqual(len(s.sock.sent), 8)
-                sent = s.sock.sent[3]
-                self.assertEqual(sent[:4], b"\x00\x00\x00\x00")
-                self.assertEqual(sent[6:9], b"\x39\x00\x03")
-                self.assertEqual(s.sock.buf, b"")   # nada sobrou no socket
+    def test_le_as_8_paginas_sem_esperar_timeout(self):
+        s = session(EVENTOS_PAG0, *[EVENTOS_PAG7] * 7)
+        evs = s.events()
+        self.assertEqual(len(evs), 64)
+        self.assertEqual(s.sock.sent[3][:4] + s.sock.sent[3][6:9], b"\x00\x00\x00\x00\x39\x00\x03")
+        self.assertEqual(s.sock.buf, b"")
+
+    def test_frame_de_129_bytes_com_len_0x82(self):
+        s = session(EVENTOS_PAG7 + ACK)
+        self.assertEqual(s._xchg(b"x"), EVENTOS_PAG7)
+        self.assertEqual(s.sock.buf, ACK)   # parou no fim do frame
 
     def test_resposta_errada(self):
         with self.assertRaisesRegex(RuntimeError, "página 0"):

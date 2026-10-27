@@ -64,7 +64,7 @@ python3 elc6012_client.py --mac 001A3F123456 shock-on    # só o choque
 python3 elc6012_client.py --mac 001A3F123456 shock-off
 python3 elc6012_client.py --mac 001A3F123456 bypass 3      # anula a zona 3
 python3 elc6012_client.py --mac 001A3F123456 unbypass 3    # (só com o alarme desarmado)
-python3 elc6012_client.py --mac 001A3F123456 events        # histórico (64 eventos; experimental)
+python3 elc6012_client.py --mac 001A3F123456 events        # histórico: últimos 64 eventos, mais novo primeiro
 ```
 
 O `status` imprime os campos interpretados; `arm`/`disarm` já retornam o novo
