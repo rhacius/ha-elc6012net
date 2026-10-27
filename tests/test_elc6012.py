@@ -412,6 +412,19 @@ class TestBridge(unittest.TestCase):
         self.assertEqual((fired["event_type"], fired["zona_usuario"]), ("disparo", "01"))
         self.assertEqual(pubs["elc6012/event/last"], "Disparo de zona · alarme")
 
+    def test_ultimo_evento_alem_da_pagina_0(self):
+        # Página 0 só com "Acesso por download": a 1ª leitura busca nas seguintes.
+        self.b.session = sess = session(FRAMES["so_choque"], EVENTOS_PAG0, EVENTOS_PAG0,
+                                        EVENTOS_PAG7)
+        self.assertTrue(self.b.poll_once())
+        self.assertEqual(self.b.mqtt.pubs["elc6012/event/last"], "Arme remoto · choque")
+        self.assertEqual([p[8] for p in sess.sock.sent[1:]], [0, 1, 2])   # parou na 2
+        self.assertNotIn("elc6012/event/fired", self.b.mqtt.pubs)
+        # Nas leituras seguintes só a página 0.
+        sess.sock.responses = [FRAMES["so_choque"], EVENTOS_PAG0]
+        self.b.poll_once()
+        self.assertEqual(len(sess.sock.sent), 6)
+
     def test_tipos_de_evento(self):
         evs = c.parse_events(EVENTOS_PAG7)
         self.assertEqual({bridge_mod.event_type(e) for e in evs if e["codigo"] != "1410"},

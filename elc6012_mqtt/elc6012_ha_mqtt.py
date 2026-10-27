@@ -42,8 +42,8 @@ except ImportError:
     print("Instale paho-mqtt:  pip install -r requirements.txt", file=sys.stderr)
     sys.exit(1)
 
-from elc6012_client import (NUM_ZONES, ElcCloudSession, PanelRefused, normalize_mac,
-                            password_bytes)
+from elc6012_client import (EVENT_PAGES, NUM_ZONES, ElcCloudSession, PanelRefused,
+                            normalize_mac, password_bytes)
 
 POLL_DEFAULT = 15
 POLL_MIN = 10   # numa sessão aberta cada consulta leva ~0,3 s
@@ -341,16 +341,22 @@ class Bridge:
               f"abertas={st['zonas_abertas']} disparo={st['zonas_disparadas']} "
               f"bypass={st['zonas_bypass']}")
 
-    def _process_events(self, evs):
+    def _process_events(self, evs, older=None):
         """Publica os eventos novos da página 0 (mais novo primeiro).
 
         Na primeira leitura só memoriza o que já existia (e mostra o último
         evento no sensor); depois, publica cada registro que não estava na
-        leitura anterior, do mais antigo para o mais novo."""
+        leitura anterior, do mais antigo para o mais novo. older(página) lê
+        as páginas seguintes quando a 0 só tem "Acesso por download" (cada
+        login grava um)."""
         raws = [ev["bruto"] for ev in evs]
         relevant = [ev for ev in evs if ev["codigo"] != EVENT_ACCESS]
         if self._seen_events is None:
             self._seen_events = set(raws)
+            page = 1
+            while not relevant and older and page < EVENT_PAGES:
+                relevant = [ev for ev in older(page) if ev["codigo"] != EVENT_ACCESS]
+                page += 1
             if relevant:
                 self._publish_last_event(relevant[0])
             return
@@ -387,7 +393,7 @@ class Bridge:
             return False
         self._publish_status(st)
         try:
-            self._process_events(s.events_page(0))
+            self._process_events(s.events_page(0), older=s.events_page)
         except Exception as e:
             # O status já foi publicado; só reconecta na próxima consulta.
             print(f"[!] falha ao ler eventos: {e}", file=sys.stderr)

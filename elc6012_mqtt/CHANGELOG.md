@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2
+
+- **"Último evento" não fica mais vazio ao iniciar:** quando os eventos mais
+  recentes do eletrificador são só "Acesso por download" (cada login grava um),
+  o add-on procura nas páginas anteriores do histórico o último evento real.
+
 ## 1.1.1
 
 - **Disparo do choque reconhecido:** o rompimento ou aterramento da cerca (evento
