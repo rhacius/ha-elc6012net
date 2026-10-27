@@ -493,6 +493,10 @@ EVENT_NAMES = {
     "4A3": "Arme/desarme automático", "14A3": "Arme automático", "34A3": "Desarme automático",
     "456": "Arme stay", "1456": "Desarme stay", "3456": "Arme stay",
     "57A": "Bypass de zona", "13A": "Disparo de zona", "133": "Disparo de zona 24h",
+    # Perímetro (Contact ID 131): disparo do choque — rompimento/aterramento da
+    # cerca após N pulsos falhos. Fora do dicionário do app, que só o trata
+    # como partição de choque (1131 na partição 1); nome conforme o manual.
+    "131": "Disparo do choque (cerca)",
     "12A": "Pânico audível", "122": "Pânico silencioso", "146": "Pânico silencioso",
     "384": "Bateria baixa de sensor", "3A1": "Falta de energia elétrica (AC)",
     "342": "Falha de AC no módulo de expansão", "145": "Tamper do módulo de expansão",
@@ -521,7 +525,9 @@ def parse_events(resp: bytes) -> list[dict]:
         if name and full not in EVENT_NAMES and rec[0] == 3:
             name += " (restauração)"
         partition = rec[5]
-        if partition == 1 and int(digits, 16) == 0x1131:   # caso especial do app
+        # O app trata 1131 (perímetro) na partição 1 como choque; aplicado
+        # também à restauração (3131).
+        if partition == 1 and digits[1:] == "131":
             partition = 2
         events.append({
             "codigo": digits.replace("A", "0"),   # Contact ID legível, ex.: 1130

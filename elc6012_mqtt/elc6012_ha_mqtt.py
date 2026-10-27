@@ -50,21 +50,27 @@ POLL_MIN = 10   # numa sessão aberta cada consulta leva ~0,3 s
 
 # Tipos da entidade event (para automações); "Acesso por download" (1410), que
 # o relay grava a cada login, é ignorado.
-EVENT_TYPES = ["disparo", "panico", "arme", "desarme", "bypass", "energia", "outro"]
+EVENT_TYPES = ["disparo", "panico", "arme", "desarme", "bypass", "energia", "restauracao",
+               "outro"]
 EVENT_ACCESS = "1410"
 
 
 def event_type(ev):
-    """Classifica um evento de parse_events() num dos EVENT_TYPES."""
-    eee = ev["codigo"][1:]
-    if eee in ("130", "133"):
-        return "disparo"
-    if eee in ("120", "122", "146"):
-        return "panico"
+    """Classifica um evento de parse_events() num dos EVENT_TYPES.
+
+    Contact ID: qualificador 1 = evento, 3 = restauração (no arme/desarme o
+    qualificador diz qual dos dois, por isso eles vêm antes)."""
+    qualifier, eee = ev["codigo"][0], ev["codigo"][1:]
     if ev["evento"].startswith("Desarme"):
         return "desarme"
     if ev["evento"].startswith("Arme"):
         return "arme"
+    if qualifier == "3":
+        return "restauracao"   # ex.: choque/zona restaurados, energia AC de volta
+    if eee in ("130", "131", "133"):
+        return "disparo"
+    if eee in ("120", "122", "146"):
+        return "panico"
     if eee == "570":
         return "bypass"
     if eee in ("301", "342"):

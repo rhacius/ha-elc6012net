@@ -112,8 +112,9 @@ dispositivo (ex.: `alarm_control_panel.elc_6012_net_cerca_eletrica`):
 - **`sensor.ultimo_evento_cerca`** — último evento do painel (ex.: "Desarme remoto ·
   choque"), com data, hora, partição e zona/usuário nos atributos
 - **`event.cerca_eletrica`** — dispara a cada evento novo do painel, com tipo
-  `disparo`, `panico`, `arme`, `desarme`, `bypass`, `energia` ou `outro` (para
-  automações; pega até um disparo curto entre duas consultas)
+  `disparo`, `panico`, `arme`, `desarme`, `bypass`, `energia`, `restauracao` ou
+  `outro` (para automações). Inclui o **disparo do choque** (rompimento/aterramento
+  da cerca), que acontece mesmo com o alarme desarmado e não aparece nas zonas
 - **`binary_sensor.ponte_elc`** — conectividade da ponte; quando `OFF`, todas as
   demais entidades ficam `unavailable` (não exibem valores antigos)
 

@@ -199,6 +199,13 @@ Nomes (`Elc6012Net.EVENTS_TRANSLATED`): procura primeiro a chave de 4 dígitos
 (com o qualificador — ex.: `14A1` desarme por usuário, `34A1` arme por usuário) e
 depois a de 3 (ex.: `13A` disparo de zona, `57A` bypass, `3A1` falta de AC,
 `461` senha incorreta, `422` PGM). Lista completa em `EVENT_NAMES` no cliente.
+**Disparo do choque** (manual: o setor de choque dispara por rompimento/aterramento
+da cerca após N pulsos falhos, padrão 10, mesmo com o alarme desarmado): Contact ID
+**131** (perímetro) — `1131` disparo, `3131` restauração. Fora do `EVENTS_TRANSLATED`;
+o app só o reconhece pela regra "1131 na partição 1 = choque". Inferido da
+decompilação + manual; ainda não visto ao vivo. Qualificador 3 = restauração
+(também `3301` = energia AC de volta).
+
 **Página 0 = eventos mais recentes**; dentro de cada página, do mais novo para o
 mais antigo. Buffer de **64 eventos**.
 

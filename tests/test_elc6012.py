@@ -417,6 +417,18 @@ class TestBridge(unittest.TestCase):
         self.assertEqual({bridge_mod.event_type(e) for e in evs if e["codigo"] != "1410"},
                          {"arme", "desarme"})
 
+    def test_disparo_do_choque_e_restauracoes(self):
+        # Sintéticos: E131 na partição 1 (o app trata como choque), R131, falha/volta de AC.
+        recs = [bytes([1, 1, 3, 1, 0, 1] + [0] * 9), bytes([3, 1, 3, 1, 0, 1] + [0] * 9),
+                bytes([1, 3, 0xA, 1, 0, 0] + [0] * 9), bytes([3, 3, 0xA, 1, 0, 0] + [0] * 9)]
+        evs = c.parse_events(event_page(recs))
+        self.assertEqual([(e["evento"], e["particao"], bridge_mod.event_type(e)) for e in evs], [
+            ("Disparo do choque (cerca)", "choque", "disparo"),
+            ("Disparo do choque (cerca) (restauração)", "choque", "restauracao"),
+            ("Falta de energia elétrica (AC)", "—", "energia"),
+            ("Falta de energia elétrica (AC) (restauração)", "—", "restauracao"),
+        ])
+
     def test_recusa_do_painel_mantem_sessao(self):
         self.b.session = sess = session(FRAMES["armado"])
         self.assertFalse(self.b._execute("BYPASS_ON_2"))
