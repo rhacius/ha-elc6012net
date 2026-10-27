@@ -248,6 +248,7 @@ Validado: arme/desarme remoto aparecem como `34A7`/`14A7` com a partição certa
 | Login com outra sessão ativa no painel | ⚠️ NACK código 50 (`0x32`) — o relay aceita **uma sessão por painel** (ver §1.1) |
 | Sessão única por 12 min (16 consultas, intervalos de 30/60/120 s) | ✅ sem queda, ~0,3 s por consulta; durante ela o app Guardian mostra "central desconectada" |
 | Eventos `0x3900` páginas 0–7 | ✅ 129 bytes cada; página 0 = mais recentes; arme/desarme remoto como `34A7`/`14A7` |
+| Bypass/reativação de zona pelo `0x401F` com o alarme desarmado | ⚠️ **não gera evento** no buffer (zona 8, 27/out/2026) |
 | Disparo de zona / do choque (`[54]`, evento 131), alimentação `[79]`, PGM `[145]` | ⏳ não validados ao vivo (disparo exige romper/aterrar a cerca) |
 
 ## 9. Referências de código (IL decodificado)
