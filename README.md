@@ -156,8 +156,8 @@ dashboard, **Editar → Adicionar view → ⋮ → Editar em YAML** e cole o tre
 │  [ teclado: ARMAR / DESARMAR ]        │  │  Zona 1  Zona 2  Zona 3  Zona 4  │
 │  ⚡ Choque — segure para alterar  ON  │  │  Zona 5  Zona 6  Zona 7  Zona 8  │
 │  🛡 Disparo da cerca          Seguro  │  │  Bypass — segure para alterar    │
-└───────────────────────────────────────┘  │  Zona 1  Zona 2  …       Zona 8  │
-                                           └──────────────────────────────────┘
+│  🕘 Último evento   Desarme · choque  │  │  Zona 1  Zona 2  …       Zona 8  │
+└───────────────────────────────────────┘  └──────────────────────────────────┘
 ```
 
 Os comandos que mexem na cerca (choque e bypass) só disparam **segurando** o
@@ -206,6 +206,11 @@ sections:
         entity: binary_sensor.disparo
         name: Disparo da cerca
         color: red
+      # Último evento do histórico do painel (arme, desarme, disparo…)
+      - type: tile
+        entity: sensor.ultimo_evento_cerca
+        name: Último evento
+        icon: mdi:history
 
   - type: grid
     cards:
