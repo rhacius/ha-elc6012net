@@ -26,7 +26,7 @@ elc6012_ha_mqtt.py ──HTTPS/TCP──> nuvem Intelbras (relay amt8000) ──
 
 1. Configurações → Add-ons → Loja → ⋮ → **Repositórios** → adicione
    `https://github.com/rhacius/ha-elc6012net` (ou use o botão acima).
-2. Instale o add-on **ELC 6012 NET** (é compilado no próprio HA; leva alguns minutos).
+2. Instale o add-on **ELC 6012 NET** (imagem pronta para `aarch64` e `amd64`).
 3. Na aba **Configuração**, informe o `mac` do ELC e a `password` do app Guardian.
 4. Inicie. O dispositivo aparece na integração **MQTT** (requer o add-on
    Mosquitto; as credenciais do broker são obtidas automaticamente).

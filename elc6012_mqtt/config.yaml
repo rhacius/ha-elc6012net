@@ -2,6 +2,8 @@ name: ELC 6012 NET
 version: "1.0.2"
 slug: elc6012_mqtt
 url: https://github.com/rhacius/ha-elc6012net
+# Imagens prontas (GitHub Actions); sem esta linha o HA compila localmente.
+image: ghcr.io/rhacius/{arch}-addon-elc6012_mqtt
 description: Ponte do eletrificador Intelbras ELC 6012 NET para o Home Assistant via MQTT
 arch:
   - aarch64
