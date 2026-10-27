@@ -31,6 +31,16 @@ elc6012_ha_mqtt.py ──HTTPS/TCP──> nuvem Intelbras (relay amt8000) ──
 4. Inicie. O dispositivo aparece na integração **MQTT** (requer o add-on
    Mosquitto; as credenciais do broker são obtidas automaticamente).
 
+> **O add-on dispensa o app Guardian.** O uso do dia a dia — choque, alarme,
+> bypass, zonas, eventos e notificações — passa a ser pelo Home Assistant. A
+> nuvem Intelbras aceita uma sessão por eletrificador e o add-on mantém a sua,
+> então o app mostra "central desconectada" enquanto ele roda. O app só é
+> necessário para configurações de instalação (zonas, usuários, PGM, Wi-Fi,
+> pulsos falhos, firmware): pare o add-on, use o app e inicie o add-on de novo.
+
+O que mudou em cada versão: [`elc6012_mqtt/CHANGELOG.md`](elc6012_mqtt/CHANGELOG.md)
+(o Home Assistant mostra o mesmo texto ao oferecer a atualização).
+
 As seções abaixo descrevem o uso sem add-on (CLI e ponte standalone).
 
 ## Arquivos
@@ -41,6 +51,7 @@ As seções abaixo descrevem o uso sem add-on (CLI e ponte standalone).
 | `elc6012_client.py` | Biblioteca/CLI (stdlib pura) — teste antes de tudo! |
 | `elc6012_ha_mqtt.py` | Ponte MQTT com auto-descoberta para o HA |
 | `elc6012_mqtt/` | Add-on do HA (os dois `.py` da raiz são links para o código daqui) |
+| `elc6012_mqtt/CHANGELOG.md` | Mudanças por versão (exibidas pelo HA na atualização) |
 | `repository.yaml` | Torna o repositório instalável pela loja de add-ons |
 | `tests/` | Testes com respostas reais do ELC (`python3 -m unittest`) |
 | `crc_table_2018.txt` | Tabela CRC do formato 2018 (referência; o ELC não usa na nuvem) |

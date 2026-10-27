@@ -4,11 +4,17 @@ Ponte entre o eletrificador Intelbras ELC 6012 NET e o Home Assistant. O
 controle passa pela nuvem Intelbras (o mesmo caminho do app Guardian), então o
 ELC precisa estar online no app.
 
-## Importante: uma sessão por painel
+## O add-on substitui o app Guardian
 
-A nuvem Intelbras aceita **uma sessão por ELC**. O add-on mantém a sua aberta, então,
-enquanto ele estiver rodando, **o app Guardian mostra "central desconectada"**.
-Controle a cerca pelo Home Assistant, ou pare o add-on para usar o app.
+Com o add-on, o uso do dia a dia é todo pelo Home Assistant: ligar/desligar o
+choque, armar/desarmar o alarme, bypass de zonas, estado das zonas, histórico de
+eventos e notificações (disparo, choque desligado, falta de energia…).
+
+A nuvem Intelbras aceita **uma sessão por eletrificador** e o add-on mantém a sua
+aberta — por isso, **enquanto ele roda, o app Guardian mostra "central
+desconectada"**. O app só é necessário para configurações de instalação (zonas,
+usuários, PGM, Wi-Fi, pulsos falhos, firmware): pare o add-on, use o app e inicie
+o add-on de novo.
 
 ## Requisitos
 

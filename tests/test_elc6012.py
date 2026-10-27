@@ -459,5 +459,18 @@ class TestBridge(unittest.TestCase):
                          [t for t, p in pubs.items() if p == ""])
 
 
+class TestRelease(unittest.TestCase):
+    def test_changelog_tem_a_versao_do_addon(self):
+        # O HA mostra o CHANGELOG.md na atualização; o build também confere isto.
+        import os
+        import re
+        root = os.path.join(os.path.dirname(__file__), "..", "elc6012_mqtt")
+        config = open(os.path.join(root, "config.yaml"), encoding="utf-8").read()
+        version = re.search(r'^version: *"?([^"\n]+)"?', config, re.M).group(1)
+        changelog = open(os.path.join(root, "CHANGELOG.md"), encoding="utf-8").read()
+        self.assertRegex(changelog, rf"(?m)^## {re.escape(version)}$",
+                         f"descreva a versão {version} em elc6012_mqtt/CHANGELOG.md")
+
+
 if __name__ == "__main__":
     unittest.main()

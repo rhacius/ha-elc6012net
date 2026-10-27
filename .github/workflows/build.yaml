@@ -2,7 +2,9 @@
 # Home Assistant baixar pronta em vez de compilar na instalação.
 #
 # Fluxo de release (evita o HA ver uma versão cuja imagem ainda não existe):
-#   1. aumente "version" em elc6012_mqtt/config.yaml num branch "release";
+#   1. aumente "version" em elc6012_mqtt/config.yaml e descreva a versão em
+#      elc6012_mqtt/CHANGELOG.md ("## X.Y.Z" — o HA mostra esse texto na
+#      atualização; o build falha sem ele), num branch "release";
 #   2. git push origin release   -> este workflow publica as imagens;
 #   3. com o workflow verde, leve o commit para o master.
 name: Build do add-on
@@ -36,6 +38,14 @@ jobs:
           version=$(sed -nE 's/^version: *"?([^"]+)"?/\1/p' elc6012_mqtt/config.yaml)
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.arch }}-addon-elc6012_mqtt" >> "$GITHUB_OUTPUT"
+
+      - name: Changelog da versão
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          grep -q "^## ${version}\$" elc6012_mqtt/CHANGELOG.md || {
+            echo "::error file=elc6012_mqtt/CHANGELOG.md::falta a seção '## ${version}' no CHANGELOG.md"
+            exit 1
+          }
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
