@@ -382,10 +382,25 @@ class Bridge:
         self._pub("event/last", label)
         return attrs
 
-    def poll_once(self):
+    def _status_with_retry(self):
+        """Status pela sessão aberta; se ela falhar, refaz o login UMA vez na hora.
+
+        A sessão persistente às vezes morre em silêncio na nuvem (o status volta
+        vazio após o timeout). Sem esta nova tentativa, uma falha isolada deixava
+        a ponte offline e esperava o backoff inteiro (2x o poll) para reconectar.
+        """
         try:
             s = self._session()
-            st = s.status()
+            return s, s.status()
+        except Exception as e:
+            print(f"[!] falha ao consultar status: {e} — reconectando", file=sys.stderr)
+            self._drop_session()
+        s = self._session()
+        return s, s.status()
+
+    def poll_once(self):
+        try:
+            s, st = self._status_with_retry()
         except Exception as e:
             print(f"[!] falha ao consultar status: {e}", file=sys.stderr)
             self._drop_session()

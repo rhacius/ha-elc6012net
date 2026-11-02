@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.3
+
+- **Menos quedas da ponte:** quando a sessão com a nuvem Intelbras morre em
+  silêncio (status vazio), a ponte refaz o login na mesma consulta em vez de
+  ficar offline e esperar 2x o intervalo de consulta. Antes, cada falha isolada
+  deixava as entidades indisponíveis por ~2 min.
+
 ## 1.1.2
 
 - **"Último evento" não fica mais vazio ao iniciar:** quando os eventos mais

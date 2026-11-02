@@ -8,6 +8,7 @@ import io
 import json
 import socket
 import unittest
+import unittest.mock
 
 import elc6012_client as c
 
@@ -397,6 +398,37 @@ class TestBridge(unittest.TestCase):
         self.assertTrue(self.b.poll_once())
         self.assertIs(self.b.session, sess)   # nenhum novo login
         self.assertEqual(len(sess.sock.sent), 4)
+
+    def _novas_sessoes(self, *sessoes):
+        """Troca o login real por sessões roteirizadas, uma por login."""
+        fila = list(sessoes)
+
+        def fabrica(mac, password):
+            s = fila.pop(0)
+            s.open = lambda: None
+            return s
+
+        patch = unittest.mock.patch.object(bridge_mod, "ElcCloudSession", side_effect=fabrica)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_sessao_morta_reconecta_na_hora(self):
+        # Status vazio na sessão antiga: refaz o login no mesmo poll, sem ficar offline.
+        self.b.session = session(b"")
+        self._novas_sessoes(session(FRAMES["so_choque"], EVENTOS_PAG7))
+        enviados = []
+        self.b.mqtt.publish = lambda t, p, retain=False: enviados.append((t, p))
+        self.assertTrue(self.b.poll_once())
+        self.assertIn(("elc6012/online/state", "ON"), enviados)
+        self.assertNotIn(("elc6012/online/state", "OFF"), enviados)
+
+    def test_reconexao_falha_marca_offline(self):
+        self.b.session = session(b"")
+        self._novas_sessoes(session(b""))
+        self.b._last_pub["online/state"] = "ON"
+        self.assertFalse(self.b.poll_once())
+        self.assertEqual(self.b.mqtt.pubs["elc6012/online/state"], "OFF")
+        self.assertIsNone(self.b.session)
 
     def test_eventos_novos(self):
         old = [EVENTOS_PAG7[8 + 15 * i:8 + 15 * (i + 1)] for i in range(8)]
